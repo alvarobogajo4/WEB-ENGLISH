@@ -1,7 +1,7 @@
 {
   "name": "English 20 Minutes",
   "short_name": "English 20",
-  "description": "20 minutos diarios de inglés profesional: reuniones, vocabulario, gramática, listening y speaking.",
+  "description": "20 minutos diarios de inglés: conversación, reuniones, vocabulario, gramática, listening y speaking.",
   "lang": "es",
   "start_url": "./",
   "scope": "./",

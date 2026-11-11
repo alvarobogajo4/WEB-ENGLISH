@@ -68,22 +68,28 @@
       return r;
     },
 
-    /* Elige n ítems: repasos pendientes (máx. 60 %), nuevos, resto de pendientes
-     * y, si !onlyDue, relleno con los no pendientes de caja más baja. */
+    /* Elige n ítems, por este orden:
+     *   1. repasos pendientes de días anteriores (máx. 60 %),
+     *   2. nuevos,
+     *   3. el resto de pendientes, incluidos los fallados HOY (caja 1 = intervalo 0):
+     *      vuelven en la siguiente sesión del día solo si no hay nada nuevo, para que
+     *      un ítem fallado no acapare un bloque de 1–2 huecos (retos, audios),
+     *   4. si !onlyDue, relleno con los no pendientes de caja más baja. */
     pickFrom(list, n, items, today, onlyDue = false, rnd = Math.random) {
       if (n <= 0 || !list.length) return [];
-      const due = [], fresh = [], rest = [];
+      const due = [], dueToday = [], fresh = [], rest = [];
       for (const it of list) {
         const rec = items[it.id];
         if (!rec) fresh.push(it);
-        else if (SRS.isDue(rec, today)) due.push(it);
-        else rest.push(it);
+        else if (!SRS.isDue(rec, today)) rest.push(it);
+        else if (rec.lastSeen === today) dueToday.push(it);
+        else due.push(it);
       }
       due.sort((a, b) => items[a.id].box - items[b.id].box || ((items[a.id].lastSeen || "") < (items[b.id].lastSeen || "") ? -1 : 1));
       const maxDue = Math.max(1, Math.ceil(n * 0.6));
       const picked = due.slice(0, maxDue);
       for (const it of Util.shuffle(fresh, rnd)) { if (picked.length >= n) break; picked.push(it); }
-      for (const it of due.slice(maxDue)) { if (picked.length >= n) break; picked.push(it); }
+      for (const it of [...due.slice(maxDue), ...dueToday]) { if (picked.length >= n) break; picked.push(it); }
       if (!onlyDue) {
         rest.sort((a, b) => items[a.id].box - items[b.id].box);
         for (const it of rest) { if (picked.length >= n) break; picked.push(it); }
@@ -191,20 +197,25 @@
   /* Muletillas y atenuadores que restan autoridad en un registro profesional.
    * "Sorry" funcional ("Sorry to jump in", "Sorry, could you…") NO cuenta:
    * es la forma correcta de interrumpir o pedir aclaración. Solo se marca la
-   * disculpa innecesaria ("I'm sorry", "sorry for/about"). */
+   * disculpa innecesaria ("I'm sorry", "sorry for/about").
+   * authority: atenuadores que restan autoridad en un contexto profesional pero
+   * son naturales en una conversación informal ("I think", "maybe"…). En modo
+   * social solo se cuentan las muletillas de relleno. */
   const HEDGES = [
-    { t: "I think", re: /\bI think\b/gi },
-    { t: "maybe", re: /\bmaybe\b/gi },
-    { t: "I'm sorry / sorry for", re: /\b(?:I'm|I am|so|really) sorry\b|\bsorry (?:for|about)\b/gi },
-    { t: "I guess", re: /\bI guess\b/gi },
-    { t: "kind of / sort of", re: /\b(?:kind|sort) of\b/gi },
+    { t: "I think", re: /\bI think\b/gi, authority: true },
+    { t: "maybe", re: /\bmaybe\b/gi, authority: true },
+    { t: "I'm sorry / sorry for", re: /\b(?:I'm|I am|so|really) sorry\b|\bsorry (?:for|about)\b/gi, authority: true },
+    { t: "I guess", re: /\bI guess\b/gi, authority: true },
+    { t: "kind of / sort of", re: /\b(?:kind|sort) of\b/gi, authority: true },
     { t: "basically", re: /\bbasically\b/gi },
     { t: "like", re: /\blike,/gi },
     { t: "you know", re: /\byou know\b/gi },
     { t: "um / uh", re: /\b(?:um+|uh+|erm)\b/gi }
   ];
-  function countHedges(text) {
-    return HEDGES.map((h) => ({ t: h.t, n: (String(text).match(h.re) || []).length })).filter((h) => h.n);
+  function countHedges(text, { social = false } = {}) {
+    return HEDGES.filter((h) => !(social && h.authority))
+      .map((h) => ({ t: h.t, n: (String(text).match(h.re) || []).length }))
+      .filter((h) => h.n);
   }
 
   const Core = { Util, SRS, Streak, State, HEDGES, countHedges };

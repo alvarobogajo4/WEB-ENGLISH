@@ -58,26 +58,32 @@ const options = (id, opts, answer) => {
 };
 
 /* ---- Por pool ---- */
+const TONES = ["natural", "formal", "buzzword"];
+const VOCAB_TYPES = ["phrasal", "idiom", "collocation", "word"];
+
 for (const it of D.BLOCKS.registerUpgrade || []) {
   for (const k of ["plain", "c1", "whyItWorks"]) if (!isStr(it[k])) err(it.id, `falta ${k}`);
+  if (it.tone === undefined) warn(it.id, "sin tone (natural | formal | buzzword)");
+  else if (!TONES.includes(it.tone)) err(it.id, `tone no válido "${it.tone}"`);
   options(it.id, [it.c1, ...(it.distractors || [])]);
 }
 
-for (const pool of ["collocations", "hrVocab", "grammar"]) {
+for (const pool of ["collocations", "hrVocab", "everydayVocab", "grammar"]) {
   for (const it of D.BLOCKS[pool] || []) {
     const gaps = (it.sentence || "").split("___").length - 1;
     if (gaps !== 1) err(it.id, `sentence debe tener exactamente un "___" (tiene ${gaps})`);
     options(it.id, it.options, it.answer);
     if (pool === "grammar") { if (!isStr(it.rule)) err(it.id, "falta rule"); if (!isStr(it.topic)) err(it.id, "falta topic"); }
     else if (!isStr(it.meaningEs)) err(it.id, "falta meaningEs");
+    if ((pool === "collocations" || pool === "everydayVocab") && it.type !== undefined && !VOCAB_TYPES.includes(it.type)) err(it.id, `type no válido "${it.type}"`);
   }
 }
 
-for (const it of D.BLOCKS.meetingMoves || []) {
+for (const [pool, it] of [...(D.BLOCKS.meetingMoves || []).map((x) => ["meetingMoves", x]), ...(D.BLOCKS.conversation || []).map((x) => ["conversation", x])]) {
   if (!D.MOVE_FUNCTIONS[it.fn]) err(it.id, `fn desconocida "${it.fn}"`);
   for (const k of ["situation", "answer", "note"]) if (!isStr(it[k])) err(it.id, `falta ${k}`);
   options(it.id, [it.answer, ...(it.distractors || [])]);
-  const h = countHedges(it.answer || "");
+  const h = countHedges(it.answer || "", { social: pool === "conversation" });
   if (h.length) warn(it.id, `la respuesta modelo contiene muletillas que el panel de Delivery penaliza: ${h.map((x) => x.t).join(", ")}`);
 }
 
@@ -111,7 +117,8 @@ for (const it of D.BLOCKS.challenges || []) {
     try { re = new RegExp(u.m, "i"); } catch (e) { err(it.id, `regex no válida en "${u.t}": ${e.message}`); continue; }
     if (!re.test(it.modelAnswer)) err(it.id, `la modelAnswer no cumple el chunk obligatorio "${u.t}"`);
   }
-  const h = countHedges(it.modelAnswer || "");
+  if (it.context !== undefined && it.context !== "social") err(it.id, `context no válido "${it.context}" (solo "social")`);
+  const h = countHedges(it.modelAnswer || "", { social: it.context === "social" });
   if (h.length) warn(it.id, `la modelAnswer contiene muletillas: ${h.map((x) => x.t).join(", ")}`);
 }
 

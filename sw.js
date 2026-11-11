@@ -1,18 +1,21 @@
 /* Service worker · English 20 Minutes
- * - Ficheros propios: network-first con timeout (3 s). Con red lenta o sin red
- *   se sirve la caché; la respuesta de red, si llega, actualiza la caché igualmente.
+ * - Ficheros propios: network-first con timeout (3 s), revalidando siempre con el
+ *   servidor (no se fía de la caché HTTP). Con red lenta o sin red se sirve la
+ *   caché; la respuesta de red, si llega, actualiza la caché igualmente.
  * - CDN (Tailwind, Google Fonts): stale-while-revalidate.
  * - Solo se cachean respuestas válidas (nunca 404/500).
  * - Sin red, solo las navegaciones caen al shell (index.html); un .js que falta
  *   no recibe HTML a cambio.
  * Sube CACHE_VERSION si cambias la lista de ASSETS.
  */
-const CACHE_VERSION = "e20-c1-v4";
+const CACHE_VERSION = "e20-c1-v5";
 const ASSETS = ["./", "./index.html", "./js/core.js", "./js/app.js", "./js/data_c1.js", "./manifest.json", "./icons/icon.svg"];
 const NET_TIMEOUT_MS = 3000;
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE_VERSION).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  // cache: "reload" → la precaché siempre baja la versión actual del servidor.
+  const reqs = ASSETS.map((u) => new Request(u, { cache: "reload" }));
+  e.waitUntil(caches.open(CACHE_VERSION).then((c) => c.addAll(reqs)).then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", (e) => {
@@ -28,7 +31,9 @@ const timeout = (ms) => new Promise((_, reject) => setTimeout(() => reject(new E
 async function networkFirst(event) {
   const req = event.request;
   const cache = await caches.open(CACHE_VERSION);
-  const net = fetch(req).then((res) => {
+  // cache: "no-cache" → revalida con el servidor (304 si no cambió) en vez de aceptar
+  // una copia antigua de la caché HTTP del navegador (app.js nuevo + datos viejos).
+  const net = fetch(req, { cache: "no-cache" }).then((res) => {
     if (res.ok) return cache.put(req, res.clone()).then(() => res);
     return res;
   });

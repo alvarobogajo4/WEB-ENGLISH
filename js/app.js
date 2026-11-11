@@ -25,9 +25,17 @@
   const CUSTOM_PER_SESSION = 2;
   const OPTION_KINDS = ["register", "gap", "move", "trap"];
   const POOL_KIND = {
-    registerUpgrade: "register", collocations: "gap", hrVocab: "gap", grammar: "gap",
-    meetingMoves: "move", traps: "trap", listening: "listen", challenges: "challenge", custom: "card"
+    registerUpgrade: "register", collocations: "gap", hrVocab: "gap", everydayVocab: "gap", grammar: "gap",
+    meetingMoves: "move", conversation: "move", traps: "trap", listening: "listen", challenges: "challenge", custom: "card"
   };
+  const VOCAB_TYPE = { phrasal: "Phrasal verb", idiom: "Expresión", collocation: "Colocación", word: "Palabra" };
+  /* Registro de la versión "buena" en registerUpgrade. */
+  const TONE = {
+    natural:  { label: "Natural", cls: "bg-emerald-500/10 text-emerald-300", note: "" },
+    formal:   { label: "Formal", cls: "bg-sky-500/10 text-sky-300", note: "Registro formal: perfecto para un informe o un comité; en una charla con tu equipo puedes decirlo más sencillo." },
+    buzzword: { label: "Jerga corporativa", cls: "bg-amber-400/10 text-amber-300", note: "Jerga corporativa: entiéndela y úsala con moderación. Con un jefe australiano, el inglés claro y directo suele causar mejor impresión." }
+  };
+  const PRIVACY_NOTE = "El dictado lo procesa tu navegador en servidores externos (Google, Microsoft o Apple): no dictes datos reales ni confidenciales de la empresa.";
 
   /* Clases Tailwind completas (el CDN las detecta en el DOM en tiempo de ejecución). */
   const ACCENT = {
@@ -807,7 +815,7 @@
               <h1 class="mt-2 text-2xl sm:text-3xl font-semibold tracking-tight text-zinc-50">${st.doneToday ? "Sesión de hoy completada." : "Tus 20 minutos de hoy."}</h1>
               <p class="mt-2 text-sm text-zinc-400 leading-relaxed">${st.doneToday
                 ? "Puedes repetir otra sesión o reforzar un bloque concreto. El repaso espaciado prioriza lo que fallas."
-                : "Frases para intervenir en reuniones, vocabulario de HR Analytics, gramática en contexto, comprensión con tu jefe australiano y producción hablada."}</p>
+                : "Conversación y frases para reuniones, vocabulario amplio, gramática en contexto, comprensión con tu jefe australiano y producción hablada."}</p>
             </div>
             <div class="flex gap-6">
               <div><div class="text-[11px] uppercase tracking-wider text-zinc-500">Racha</div>
@@ -932,13 +940,13 @@
       const m = D.BLOCK_META[k], a = accentOf(k), n = Session.blockLength;
       const unit = { vocab: "ítems", grammar: "frases", listening: n === 1 ? "audio" : "audios", challenges: n === 1 ? "reto" : "retos" }[k];
       const how = {
-        vocab: "Frases para intervenir en reuniones, vocabulario de HR Analytics y, si toca, palabras de tu banco personal. Elige la opción más natural, como lo diría un nativo.",
+        vocab: "Frases para conversar y para intervenir en reuniones, vocabulario amplio (phrasal verbs, expresiones, colocaciones), HR Analytics y, si toca, palabras de tu banco personal. Ojo: todas las opciones pueden ser gramaticales. Elige la que diría un nativo en esa situación.",
         grammar: "Completa cada frase con la estructura correcta. Son frases de tu trabajo y la regla aparece en una línea. También salen las trampas típicas del español.",
         listening: Speech.supported
           ? "Escucha y responde. Puedes repetir el audio y ponerlo más lento. Mark habla con acento australiano. Intenta responder sin mirar la transcripción: aparece al final."
           : "Tu navegador no puede reproducir voz, así que verás la transcripción para leer. Para escuchar, usa Chrome, Edge o Safari.",
         challenges: Voice.supported
-          ? "Lee el escenario y responde en voz alta, como en la reunión real (60–90 s). Tu voz se transcribe y luego puedes corregir el texto. Usa los chunks obligatorios."
+          ? `Lee el escenario y responde en voz alta, como en la situación real (60–90 s). Tu voz se transcribe y luego puedes corregir el texto. Usa los chunks obligatorios.</p><p class="mt-2 text-xs text-zinc-400">${PRIVACY_NOTE}`
           : "Lee el escenario y escribe tu respuesta (≈ 60–100 palabras). Usa los chunks obligatorios. Para responder hablando, abre la app en Chrome, Edge o Safari."
       }[k];
       return `
@@ -1005,9 +1013,11 @@
         <p class="text-sm text-zinc-300 mb-3">¿Cuál es la versión profesional?</p>
         ${this.optionList(c.options, it.c1, c.selected, S.s.answered)}
         ${S.s.answered ? this.feedbackBox(this.isOk(), `
+          ${it.tone && TONE[it.tone] ? `<div>${this.badge(TONE[it.tone].label, TONE[it.tone].cls)}</div>` : ""}
           <p class="text-[17px] leading-relaxed text-zinc-50">${this.highlight(it.c1, it.chunks)}</p>
           <div class="flex flex-wrap gap-1.5">${it.chunks.map((ch) => `<span class="rounded-md bg-amber-400/10 border border-amber-400/30 px-2 py-0.5 text-xs text-amber-200">${Util.esc(ch)}</span>`).join("")}</div>
           <p class="text-sm text-zinc-400 leading-relaxed">${Util.esc(it.whyItWorks)}</p>
+          ${it.tone && TONE[it.tone] && TONE[it.tone].note ? `<p class="text-xs leading-relaxed ${it.tone === "buzzword" ? "text-amber-200/90" : "text-zinc-400"}">${TONE[it.tone].note}</p>` : ""}
           ${this.speakBtn(it.c1)}`) : ""}
         ${this.footer("Siguiente", S.s.answered)}`;
     },
@@ -1018,7 +1028,7 @@
       const filled = S.s.answered
         ? `<span class="${ok ? "text-emerald-300" : "text-sky-300"} font-semibold underline decoration-2 underline-offset-4">${Util.esc(it.answer)}</span>`
         : `<span class="inline-block min-w-[5rem] border-b-2 border-dashed border-sky-400/60 mx-1">&nbsp;</span>`;
-      const extra = pool === "grammar" ? [this.badge(it.topic, "bg-sky-500/10 text-sky-300")] : it.type && pool === "collocations" ? [this.badge(it.type)] : [];
+      const extra = pool === "grammar" ? [this.badge(it.topic, "bg-sky-500/10 text-sky-300")] : it.type && VOCAB_TYPE[it.type] ? [this.badge(VOCAB_TYPE[it.type] || it.type)] : [];
       const info = pool === "grammar"
         ? `<p class="text-sm leading-relaxed text-zinc-200"><span class="font-semibold text-sky-300">Regla:</span> ${Util.esc(it.rule)}</p>`
         : `<div class="flex items-baseline gap-2 flex-wrap"><span class="text-lg font-semibold text-sky-300">${Util.esc(it.answer)}</span><span class="text-sm text-zinc-400">— ${Util.esc(it.meaningEs)}</span></div>
@@ -1035,9 +1045,10 @@
 
     item_move() {
       const S = Session, it = S.item, c = S.s.current;
+      const social = S.entry.pool === "conversation";
       return `${this.itemHead([this.badge(D.MOVE_FUNCTIONS[it.fn], "bg-amber-400/10 text-amber-300")])}
         <div class="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5 mb-5">
-          <div class="text-[11px] uppercase tracking-wider text-zinc-500">Situación en la reunión</div>
+          <div class="text-[11px] uppercase tracking-wider text-zinc-500">${social ? "Situación" : "Situación en la reunión"}</div>
           <p class="mt-1.5 text-lg text-zinc-200">${Util.esc(it.situation)}</p>
         </div>
         <p class="text-sm text-zinc-300 mb-3">¿Qué dirías?</p>
@@ -1046,7 +1057,7 @@
           <p class="text-[17px] leading-relaxed text-zinc-50">${Util.esc(it.answer)}</p>
           <p class="text-sm text-zinc-400 leading-relaxed">${Util.esc(it.note)}</p>
           <div class="flex gap-4">${this.speakBtn(it.answer)}${this.speakBtn(it.answer, "Acento australiano", "en-AU")}</div>
-          <p class="text-xs text-zinc-500">Repítela en voz alta 2 veces: la próxima reunión te saldrá sola.</p>`) : ""}
+          <p class="text-xs text-zinc-500">Repítela en voz alta 2 veces: ${social ? "la próxima vez te saldrá sola." : "en la próxima reunión te saldrá sola."}</p>`) : ""}
         ${this.footer("Siguiente", S.s.answered)}`;
     },
 
@@ -1296,6 +1307,7 @@
       return `<div class="mb-3 flex flex-wrap items-center gap-3">
         <button type="button" id="mic-btn" data-action="mic" aria-pressed="false"></button>
         <span id="voice-status" class="text-xs text-zinc-500 tabular-nums" aria-live="polite"></span>
+        <p class="basis-full text-[11px] leading-snug text-zinc-500">🔒 ${PRIVACY_NOTE}</p>
       </div>`;
     },
 
@@ -1330,7 +1342,8 @@
 
     deliveryPanel(c) {
       const spoke = c.voice && c.voice.ms >= 5000;
-      const hedges = C.countHedges(c.text);
+      const social = Session.item.context === "social";
+      const hedges = C.countHedges(c.text, { social });
 
       let pace = "";
       if (spoke) {
@@ -1339,7 +1352,9 @@
         const [tone, verdict] = wpm < 100 ? ["text-amber-300", "Lento: gana fluidez encadenando chunks completos."]
           : wpm > 170 ? ["text-amber-300", "Rápido: en una reunión, las pausas transmiten control."]
           : ["text-emerald-300", "Buen ritmo profesional (110–160 wpm)."];
-        const len = secs < 45 ? "Algo corto para el reto: apunta a 60–90 s." : secs > 120 ? "Largo: en dirección se premia la síntesis." : "Duración adecuada.";
+        const len = secs < 45 ? "Algo corto para el reto: apunta a 60–90 s."
+          : secs > 120 ? (social ? "Largo: en una charla, deja hueco para que el otro participe." : "Largo: en dirección se premia la síntesis.")
+          : "Duración adecuada.";
         pace = `<div class="grid grid-cols-2 gap-3">
             <div class="rounded-lg bg-zinc-950/60 px-3 py-2.5"><div class="text-[11px] uppercase tracking-wider text-zinc-500">Tiempo hablado</div><div class="mt-0.5 text-lg font-semibold tabular-nums text-zinc-100">${Util.mmss(secs)}</div></div>
             <div class="rounded-lg bg-zinc-950/60 px-3 py-2.5"><div class="text-[11px] uppercase tracking-wider text-zinc-500">Ritmo</div><div class="mt-0.5 text-lg font-semibold tabular-nums ${tone}">${wpm} <span class="text-xs font-normal text-zinc-500">wpm</span></div></div>
@@ -1347,9 +1362,10 @@
           <p class="text-sm text-zinc-300">${verdict} ${len}</p>`;
       }
       if (!spoke && !hedges.length) return "";
-      const hedgeHtml = hedges.length
-        ? `<p class="text-sm text-zinc-300"><span class="text-amber-300 font-medium">Restan autoridad:</span> ${hedges.map((h) => `<span class="ml-1 rounded bg-amber-400/10 border border-amber-400/30 px-1.5 py-0.5 text-xs text-amber-200">${Util.esc(h.t)}${h.n > 1 ? ` ×${h.n}` : ""}</span>`).join("")}</p>`
-        : `<p class="text-sm text-emerald-300">Sin muletillas ni atenuadores: suena seguro.</p>`;
+      const hedgeHtml = (hedges.length
+        ? `<p class="text-sm text-zinc-300"><span class="text-amber-300 font-medium">${social ? "Muletillas de relleno:" : "Restan autoridad:"}</span> ${hedges.map((h) => `<span class="ml-1 rounded bg-amber-400/10 border border-amber-400/30 px-1.5 py-0.5 text-xs text-amber-200">${Util.esc(h.t)}${h.n > 1 ? ` ×${h.n}` : ""}</span>`).join("")}</p>`
+        : `<p class="text-sm text-emerald-300">${social ? "Sin muletillas de relleno: suena fluido." : "Sin muletillas ni atenuadores: suena seguro."}</p>`)
+        + (social ? `<p class="text-xs text-zinc-500">En una conversación informal, «I think» o «maybe» son naturales: aquí solo marcamos el relleno.</p>` : "");
 
       return `<div class="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5 space-y-3">
           <div class="text-[11px] uppercase tracking-wider text-zinc-500">Delivery</div>${pace}${hedgeHtml}</div>`;

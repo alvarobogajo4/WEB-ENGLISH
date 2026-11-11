@@ -176,3 +176,38 @@ test("countHedges es repetible (las regex globales no arrastran lastIndex)", () 
   assert.equal(countHedges("I think").length, 1);
   assert.equal(countHedges("I think").length, 1);
 });
+
+test("modo social: 'I think' y 'maybe' no cuentan, el relleno sí", () => {
+  const text = "I think maybe we could go, you know, um, basically tomorrow.";
+  const social = Object.fromEntries(countHedges(text, { social: true }).map((x) => [x.t, x.n]));
+  assert.equal(social["I think"], undefined);
+  assert.equal(social.maybe, undefined);
+  assert.equal(social["you know"], 1);
+  assert.equal(social["um / uh"], 1);
+  assert.equal(social.basically, 1);
+  const work = Object.fromEntries(countHedges(text).map((x) => [x.t, x.n]));
+  assert.equal(work["I think"], 1);
+  assert.equal(work.maybe, 1);
+});
+
+test("pickFrom: un ítem fallado hoy no acapara un bloque de 1 hueco si hay nuevos", () => {
+  const list = [{ id: "R1" }, { id: "R2" }, { id: "R3" }];
+  const items = { R1: { box: 1, seen: 1, correct: 0, lastSeen: "2026-11-11" } }; // fallado hoy
+  const out = SRS.pickFrom(list, 1, items, "2026-11-11", false, () => 0);
+  assert.notEqual(out[0].id, "R1");
+});
+
+test("pickFrom: el fallado hoy vuelve si ya no queda nada nuevo", () => {
+  const list = [{ id: "R1" }, { id: "R2" }];
+  const items = {
+    R1: { box: 1, seen: 1, correct: 0, lastSeen: "2026-11-11" },
+    R2: { box: 3, seen: 2, correct: 2, lastSeen: "2026-11-10" } // no toca
+  };
+  assert.equal(SRS.pickFrom(list, 1, items, "2026-11-11", true)[0].id, "R1");
+});
+
+test("pickFrom: un fallo de ayer sí tiene prioridad sobre lo nuevo al día siguiente", () => {
+  const list = [{ id: "R1" }, { id: "R2" }];
+  const items = { R1: { box: 1, seen: 1, correct: 0, lastSeen: "2026-11-10" } };
+  assert.equal(SRS.pickFrom(list, 1, items, "2026-11-11", false, () => 0)[0].id, "R1");
+});
