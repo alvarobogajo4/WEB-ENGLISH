@@ -213,6 +213,144 @@
     }
   };
 
+  /* ----------------------------------------------------------------- Voice */
+  /* Dictado para el Bloque 4 con la Web Speech API (Chrome, Edge, Safari).
+   * - El texto reconocido se añade a lo que ya hubiera escrito y luego se puede editar.
+   * - Chrome corta el reconocimiento tras unos segundos de silencio: si el usuario
+   *   no ha pulsado "Detener", se reinicia solo para permitir respuestas de 60–90 s.
+   * - Mide el tiempo hablado y las palabras dictadas para calcular el ritmo (wpm). */
+  const Voice = {
+    Rec: window.SpeechRecognition || window.webkitSpeechRecognition || null,
+    get supported() { return !!this.Rec; },
+    rec: null, active: false, wanted: false, target: null,
+    base: "", sessionFinal: "", sessionWords: 0, startedAt: 0, error: null, onFinish: null,
+
+    ERRORS: {
+      "not-allowed": "Permiso de micrófono denegado. Actívalo en el icono del candado de la barra de direcciones.",
+      "service-not-allowed": "El navegador no permite el dictado en esta página.",
+      "audio-capture": "No se detecta ningún micrófono.",
+      network: "El dictado necesita conexión a internet en este navegador.",
+      "language-not-supported": "Tu navegador no admite dictado en este acento. Prueba a cambiarlo en el panel."
+    },
+
+    join(...parts) { return parts.map((p) => (p || "").trim()).filter(Boolean).join(" "); },
+    words(t) { return t.trim() ? t.trim().split(/\s+/).length : 0; },
+
+    liveMs() {
+      const c = Session.s && Session.s.current;
+      const base = c && c.voice ? c.voice.ms : 0;
+      return base + (this.active ? Date.now() - this.startedAt : 0);
+    },
+
+    toggle() { this.active ? this.stop() : this.start(); },
+
+    start() {
+      if (!this.supported || this.active || !Session.s) return;
+      const c = Session.s.current;
+      if (!c || !c.voice || c.evaluated) return;
+      if (Speech.supported) speechSynthesis.cancel(); // que la voz de la app no se transcriba
+      this.error = null;
+      this.target = c;
+      this.base = c.text;
+      this.sessionFinal = "";
+      this.sessionWords = 0;
+
+      const rec = new this.Rec();
+      rec.lang = Store.state.settings.voice;
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.maxAlternatives = 1;
+
+      rec.onresult = (e) => {
+        if (!this.isCurrent()) return;
+        let fin = "", inter = "";
+        for (let i = 0; i < e.results.length; i++) {
+          const r = e.results[i];
+          if (r.isFinal) fin += " " + r[0].transcript; else inter += " " + r[0].transcript;
+        }
+        this.sessionFinal = fin;
+        this.setText(this.join(this.base, fin, inter));
+      };
+      rec.onerror = (e) => {
+        if (e.error === "no-speech" || e.error === "aborted") return;
+        this.error = this.ERRORS[e.error] || `Error de reconocimiento (${e.error}).`;
+        this.wanted = false;
+      };
+      rec.onend = () => {
+        // Consolida lo reconocido en este tramo antes de reiniciar o terminar.
+        this.sessionWords += this.words(this.sessionFinal);
+        this.base = this.join(this.base, this.sessionFinal);
+        this.sessionFinal = "";
+        if (this.isCurrent()) this.setText(this.base);
+        if (this.wanted) { try { rec.start(); return; } catch (_) { /* cae a finish */ } }
+        this.finish();
+      };
+
+      this.rec = rec;
+      this.wanted = true;
+      this.active = true;
+      this.startedAt = Date.now();
+      try { rec.start(); }
+      catch (_) { this.error = "No se pudo iniciar el micrófono."; this.finish(); return; }
+      Views.updateVoiceUI();
+    },
+
+    /* Detiene y espera al último resultado final (onend) antes de llamar a `cb`. */
+    stop(cb) {
+      if (!this.active) { if (cb) cb(); return; }
+      this.wanted = false;
+      this.onFinish = cb || null;
+      try { this.rec.stop(); } catch (_) { this.finish(); return; }
+      setTimeout(() => this.finish(), 1500); // red de seguridad si onend no llega
+    },
+
+    finish() {
+      if (!this.active) return;
+      this.active = false;
+      if (this.target && this.target.voice) {
+        this.target.voice.ms += Date.now() - this.startedAt;
+        this.target.voice.words += this.sessionWords;
+      }
+      this.sessionWords = 0;
+      const cb = this.onFinish;
+      this.onFinish = null;
+      Views.updateVoiceUI();
+      if (cb) cb();
+    },
+
+    /* Cancela sin guardar nada (salir de la sesión, cambiar de pantalla). */
+    cancel() {
+      this.wanted = false;
+      this.onFinish = null;
+      if (this.rec) { this.rec.onresult = this.rec.onend = this.rec.onerror = null; try { this.rec.abort(); } catch (_) {} }
+      this.active = false;
+      this.target = null;
+    },
+
+    isCurrent() { return !!(Session.s && Session.s.current === this.target); },
+
+    setText(text) {
+      const c = this.target;
+      c.text = text;
+      const ta = document.getElementById("challenge-text");
+      if (ta) { ta.value = text; ta.scrollTop = ta.scrollHeight; }
+      if (!c.evaluated) Views.updateChallengeLive();
+    }
+  };
+
+  /* Muletillas y atenuadores que restan autoridad en un registro ejecutivo. */
+  const HEDGES = [
+    { t: "I think", re: /\bI think\b/gi },
+    { t: "maybe", re: /\bmaybe\b/gi },
+    { t: "sorry", re: /\bsorry\b/gi },
+    { t: "I guess", re: /\bI guess\b/gi },
+    { t: "kind of / sort of", re: /\b(kind|sort) of\b/gi },
+    { t: "basically", re: /\bbasically\b/gi },
+    { t: "like", re: /\blike,/gi },
+    { t: "you know", re: /\byou know\b/gi },
+    { t: "um / uh", re: /\b(um+|uh+|erm)\b/gi }
+  ];
+
   /* --------------------------------------------------------------- Session */
   const Session = {
     s: null, // estado de la sesión en curso
@@ -251,7 +389,7 @@
       if (k === "registerUpgrade") c.options = Util.shuffle([it.c1, ...it.distractors]);
       if (k === "collocations")    c.options = Util.shuffle(it.options);
       if (k === "traps")           c.options = Util.shuffle([it.right, it.wrong, it.alt]);
-      if (k === "challenges")      Object.assign(c, { text: "", evaluated: false, checks: it.selfCheck.map(() => false) });
+      if (k === "challenges")      Object.assign(c, { text: "", evaluated: false, checks: it.selfCheck.map(() => false), voice: { ms: 0, words: 0 } });
       this.s.current = c;
       this.s.answered = false;
     },
@@ -306,8 +444,10 @@
     evaluateChallenge() {
       const c = this.s.current;
       if (c.evaluated) return;
-      c.evaluated = true;
-      Views.render();
+      // Si está dictando, espera al último fragmento reconocido antes de evaluar.
+      Voice.stop(() => {
+        if (Session.s && Session.s.current === c && !c.evaluated) { c.evaluated = true; Views.render(); }
+      });
     },
 
     finishChallenge() {
@@ -360,6 +500,7 @@
     },
 
     abort() {
+      Voice.cancel();
       this.stopTimer();
       this.s = null;
       App.go("home");
@@ -549,7 +690,9 @@
         registerUpgrade: "Verás una frase correcta pero plana. Elige la versión que diría un directivo C1.",
         collocations: "Completa el hueco con el phrasal verb o la colocación que usaría un nativo en ese contexto.",
         traps: "Te damos la idea en español. Elige la única versión en inglés que no cae en la trampa.",
-        challenges: "Lee el escenario y escribe tu respuesta (60–90 s hablados ≈ 60–100 palabras). Usa los chunks obligatorios."
+        challenges: Voice.supported
+          ? "Lee el escenario y responde hablando en voz alta, como en la reunión real (60–90 s). Tu voz se transcribe y luego puedes corregir el texto. Usa los chunks obligatorios."
+          : "Lee el escenario y escribe tu respuesta (60–90 s hablados ≈ 60–100 palabras). Usa los chunks obligatorios. Para responder hablando, abre la app en Chrome, Edge o Safari."
       }[k];
       return `
         <div class="rounded-2xl border ${a.border} ${a.soft} p-6 sm:p-8">
@@ -674,6 +817,7 @@
             <div class="flex items-center justify-between"><div class="text-[11px] uppercase tracking-wider text-emerald-400">Respuesta modelo C1</div>${this.speakBtn(it.modelAnswer)}</div>
             <p class="text-[15px] leading-relaxed text-zinc-100">${this.highlight(it.modelAnswer, it.mustUse.map((u) => u.t))}</p>
           </div>
+          ${this.deliveryPanel(c)}
           ${S.s.answered ? `<div class="text-center text-sm text-zinc-300">Puntuación del reto: <span class="font-semibold tabular-nums ${c.finalScore >= 60 ? "text-emerald-400" : "text-amber-400"}">${c.finalScore}%</span> <span class="text-zinc-500">(50% chunks · 50% rúbrica)</span></div>` : ""}
         </div>` : "";
 
@@ -694,7 +838,8 @@
             <div id="chips" class="flex flex-wrap gap-1.5">${chips}</div>
           </div>
         </div>
-        <textarea id="challenge-text" ${c.evaluated ? "readonly" : ""} rows="7" spellcheck="true" lang="en" placeholder="Write your answer in English… (también puedes decirla en voz alta y luego escribirla)"
+        ${c.evaluated ? "" : this.voiceControls()}
+        <textarea id="challenge-text" ${c.evaluated ? "readonly" : ""} rows="7" spellcheck="true" lang="en" placeholder="${Voice.supported ? "Pulsa «Responder hablando» o escribe tu respuesta en inglés…" : "Write your answer in English…"}"
           class="w-full rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 text-[15px] leading-relaxed text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-400/40 ${c.evaluated ? "opacity-80" : ""}">${Util.esc(c.text)}</textarea>
         <div class="mt-1.5 flex justify-between text-xs text-zinc-500"><span id="word-count" class="tabular-nums">${words} palabras</span><span>Objetivo: 60–100</span></div>
         ${evalPanel}
@@ -710,10 +855,77 @@
         </div></div>`;
     },
 
+    voiceControls() {
+      if (!Voice.supported) {
+        return `<p class="mb-3 text-xs text-zinc-500">Este navegador no permite dictado por voz. Para responder hablando, usa Chrome, Edge o Safari.</p>`;
+      }
+      return `<div class="mb-3 flex flex-wrap items-center gap-3">
+        <button type="button" id="mic-btn" data-action="mic" aria-pressed="false"></button>
+        <span id="voice-status" class="text-xs text-zinc-500 tabular-nums" aria-live="polite"></span>
+      </div>`;
+    },
+
+    /* Estado del botón de micrófono, sin re-render (no interrumpe el dictado). */
+    updateVoiceUI() {
+      const btn = document.getElementById("mic-btn");
+      const status = document.getElementById("voice-status");
+      const ta = document.getElementById("challenge-text");
+      if (!btn || !Session.s) return;
+      const c = Session.s.current, ms = Voice.liveMs(), secs = Math.floor(ms / 1000);
+      const mic = `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v5"/></svg>`;
+
+      btn.setAttribute("aria-pressed", String(Voice.active));
+      if (Voice.active) {
+        btn.className = "inline-flex items-center gap-2 rounded-xl border border-rose-400/60 bg-rose-500/15 px-4 py-2.5 text-sm font-medium text-rose-100 hover:bg-rose-500/25 transition";
+        btn.innerHTML = `<span class="relative flex w-2.5 h-2.5"><span class="absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75 animate-ping"></span><span class="relative inline-flex w-2.5 h-2.5 rounded-full bg-rose-500"></span></span>Detener`;
+        status.className = "text-xs tabular-nums text-rose-200";
+        status.textContent = `Grabando ${Util.mmss(secs)} · habla en inglés (${Store.state.settings.voice === "en-GB" ? "British" : "American"})`;
+      } else {
+        btn.className = "inline-flex items-center gap-2 rounded-xl border border-emerald-400/40 bg-emerald-400/10 px-4 py-2.5 text-sm font-medium text-emerald-100 hover:bg-emerald-400/20 transition";
+        btn.innerHTML = `${mic}${c.voice && c.voice.ms > 0 ? "Seguir hablando" : "Responder hablando"}`;
+        if (Voice.error) { status.className = "text-xs text-rose-300"; status.textContent = Voice.error; }
+        else if (ms > 0) { status.className = "text-xs tabular-nums text-zinc-400"; status.textContent = `Has hablado ${Util.mmss(secs)}. Revisa la transcripción y corrige lo que haga falta.`; }
+        else { status.className = "text-xs text-zinc-500"; status.textContent = "Objetivo: 60–90 s"; }
+      }
+      if (ta && !c.evaluated) {
+        ta.readOnly = Voice.active;
+        ta.classList.toggle("ring-2", Voice.active);
+        ta.classList.toggle("ring-rose-400/40", Voice.active);
+      }
+    },
+
+    deliveryPanel(c) {
+      const spoke = c.voice && c.voice.ms >= 5000;
+      const hedges = HEDGES.map((h) => ({ t: h.t, n: (c.text.match(h.re) || []).length })).filter((h) => h.n);
+      if (!spoke && !hedges.length) return "";
+
+      let pace = "";
+      if (spoke) {
+        const secs = Math.round(c.voice.ms / 1000);
+        const wpm = Math.round(c.voice.words / (c.voice.ms / 60000));
+        const [tone, verdict] = wpm < 100 ? ["text-amber-300", "Lento: gana fluidez encadenando chunks completos."]
+          : wpm > 170 ? ["text-amber-300", "Rápido: en una reunión, las pausas transmiten control."]
+          : ["text-emerald-300", "Buen ritmo ejecutivo (110–160 wpm)."];
+        const len = secs < 45 ? "Algo corto para el reto: apunta a 60–90 s." : secs > 120 ? "Largo: en dirección se premia la síntesis." : "Duración adecuada.";
+        pace = `<div class="grid grid-cols-2 gap-3">
+            <div class="rounded-lg bg-zinc-950/60 px-3 py-2.5"><div class="text-[11px] uppercase tracking-wider text-zinc-500">Tiempo hablado</div><div class="mt-0.5 text-lg font-semibold tabular-nums text-zinc-100">${Util.mmss(secs)}</div></div>
+            <div class="rounded-lg bg-zinc-950/60 px-3 py-2.5"><div class="text-[11px] uppercase tracking-wider text-zinc-500">Ritmo</div><div class="mt-0.5 text-lg font-semibold tabular-nums ${tone}">${wpm} <span class="text-xs font-normal text-zinc-500">wpm</span></div></div>
+          </div>
+          <p class="text-sm text-zinc-300">${verdict} ${len}</p>`;
+      }
+      const hedgeHtml = hedges.length
+        ? `<p class="text-sm text-zinc-300"><span class="text-amber-300 font-medium">Restan autoridad:</span> ${hedges.map((h) => `<span class="ml-1 rounded bg-amber-400/10 border border-amber-400/30 px-1.5 py-0.5 text-xs text-amber-200">${Util.esc(h.t)}${h.n > 1 ? ` ×${h.n}` : ""}</span>`).join("")}</p>`
+        : `<p class="text-sm text-emerald-300">Sin muletillas ni atenuadores: suena seguro.</p>`;
+
+      return `<div class="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5 space-y-3">
+          <div class="text-[11px] uppercase tracking-wider text-zinc-500">Delivery</div>${pace}${hedgeHtml}</div>`;
+    },
+
     afterSessionRender() {
       this.updateTimer();
+      this.updateVoiceUI();
       const ta = document.getElementById("challenge-text");
-      if (ta && !Session.s.current.evaluated) {
+      if (ta && !Session.s.current.evaluated && !Voice.supported) {
         ta.focus();
         ta.setSelectionRange(ta.value.length, ta.value.length);
       }
@@ -725,6 +937,7 @@
       const r = Session.remaining();
       el.textContent = Util.mmss(r);
       el.className = `font-mono text-sm tabular-nums w-14 text-right ${r < 0 ? "text-amber-400" : r <= 30 ? "text-amber-300 animate-pulse" : "text-zinc-300"}`;
+      if (Voice.active) this.updateVoiceUI();
     },
 
     /* Actualiza el contador y los chips del reto sin re-renderizar (mantiene el foco). */
@@ -825,6 +1038,7 @@
           case "abort": Session.abort(); break;
           case "home": Session.s = null; this.go("home"); break;
           case "speak": Speech.say(el.dataset.text); break;
+          case "mic": Voice.toggle(); break;
           case "reset-ask":
             document.getElementById("reset-zone").innerHTML =
               `<span class="text-rose-300">¿Seguro? Se borra todo.</span> <button data-action="reset-yes" class="ml-2 text-rose-400 font-semibold hover:underline">Sí, borrar</button> <button data-action="reset-no" class="ml-2 hover:text-zinc-200">Cancelar</button>`;

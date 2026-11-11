@@ -3,7 +3,7 @@
  * - CDN (Tailwind, Google Fonts): stale-while-revalidate.
  * Sube CACHE_VERSION si cambias la lista de ASSETS.
  */
-const CACHE_VERSION = "e20-c1-v1";
+const CACHE_VERSION = "e20-c1-v2";
 const ASSETS = ["./", "./index.html", "./js/app.js", "./js/data_c1.js", "./manifest.json", "./icons/icon.svg"];
 
 self.addEventListener("install", (e) => {

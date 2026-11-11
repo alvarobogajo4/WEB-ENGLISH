@@ -11,7 +11,7 @@ No incluye teoría. Cada minuto es práctica con **bloques léxicos** (Lexical A
 | **1 · Upgrade de Registro** | 01–05 | Sustituir frases planas por chunks ejecutivos | Elegir la versión C1 entre 3 opciones |
 | **2 · Phrasal Verbs & Colocaciones** | 06–10 | *rein in, phase out, iron out, meet a deadline…* | Rellenar el hueco en contexto real |
 | **3 · Advanced Trap** | 11–15 | Falsos amigos, calcos y registro (*realize ≠ realizar*) | Elegir la única versión correcta a partir del español |
-| **4 · Micro-Reto de Producción** | 16–20 | Defensa de métricas, conflictos, updates a la dirección, negociación | Escritura libre con chunks obligatorios + rúbrica + respuesta modelo |
+| **4 · Micro-Reto de Producción** | 16–20 | Defensa de métricas, conflictos, updates a la dirección, negociación | **Respuesta hablada** (o escrita) con chunks obligatorios + rúbrica + respuesta modelo |
 
 Cada bloque tiene un reloj de referencia de 5 minutos. Si se acaba el tiempo, el bloque no se corta: el reloj pasa a ámbar y sigue contando.
 
@@ -21,6 +21,8 @@ Cada bloque tiene un reloj de referencia de 5 minutos. Si se acaba el tiempo, el
 - **Racha diaria:** sube con cada sesión completa de 4 bloques y se pierde si saltas un día.
 - **Panel de progreso:** precisión por bloque y por ámbito, punto débil detectado, ítems dominados (caja 4 o más) e historial de sesiones.
 - **Refuerzo por bloque:** practicar un solo bloque sin que cuente para la racha.
+- **Responder hablando (Bloque 4):** dictado con la Web Speech API en inglés británico o americano. El texto aparece en directo y luego se puede corregir. Si Chrome corta tras un silencio, la grabación se reanuda sola.
+- **Panel de Delivery:** tiempo hablado, ritmo (palabras por minuto, objetivo 110–160) y muletillas que restan autoridad (*I think, maybe, sorry, kind of…*).
 - **Pronunciación:** voz británica o americana mediante `speechSynthesis`, sin coste ni API.
 - **Atajos:** `1`–`4` para elegir opción, `Enter` para continuar y `Esc` para salir.
 - **PWA instalable y offline** mediante `manifest.json` y `sw.js`.
@@ -45,6 +47,16 @@ icons/icon.svg    Icono
   # abre http://localhost:8080
   ```
 - **Publicar:** GitHub Pages, en Settings → Pages → Branch `main` / root.
+
+## Dictado por voz: compatibilidad
+
+| Navegador | Dictado |
+|---|---|
+| Chrome / Edge (escritorio y Android) | Sí. Usa el servicio de voz del navegador y necesita conexión a internet |
+| Safari (macOS / iOS) | Sí |
+| Firefox | No. Se responde por escrito |
+
+El navegador pide permiso para usar el micrófono la primera vez. Funciona en `https://` (GitHub Pages) y en `localhost`.
 
 ## Persistencia (`localStorage`)
 
@@ -78,7 +90,6 @@ node -e 'global.window={};require("./js/data_c1.js");const B=window.E20_DATA.BLO
 
 ## Ideas para siguientes iteraciones
 
-- Reconocimiento de voz (`SpeechRecognition`) en el Bloque 4 para responder hablando.
 - Feedback de IA sobre la respuesta libre del micro-reto.
 - Packs temáticos (HR, ventas, legal) y selector de sector.
 - Compilar Tailwind (CLI) en lugar del CDN de desarrollo.
