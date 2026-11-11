@@ -1,7 +1,7 @@
 {
-  "name": "English 20 Minutes · C1 Executive",
-  "short_name": "English C1",
-  "description": "20 minutos diarios para pasar de intermedio a C1 ejecutivo.",
+  "name": "English 20 Minutes",
+  "short_name": "English 20",
+  "description": "20 minutos diarios de inglés profesional: reuniones, vocabulario, gramática, listening y speaking.",
   "lang": "es",
   "start_url": "./",
   "scope": "./",
