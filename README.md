@@ -25,24 +25,30 @@ La app te propone subir de nivel cuando superas el 85 % en 5 sesiones seguidas.
 
 ## Funcionalidades
 
-- **Repetición espaciada (Leitner, 5 cajas):** un fallo devuelve el ítem a la caja 1 y cada acierto lo sube una (revisión a 0, 1, 3, 7 y 16 días).
+- **Repetición espaciada (Leitner, 5 cajas):** un fallo devuelve el ítem a la caja 1 y cada acierto **en su fecha de repaso** lo sube una (revisión a 0, 1, 3, 7 y 16 días). Acertar antes de tiempo (segunda sesión del día, refuerzos) cuenta en tu historial pero no adelanta el calendario.
 - **Banco personal de vocabulario:** apuntas las palabras que oyes en reuniones (también desde el móvil) y se repasan como tarjetas: ves el significado en español, intentas decirlo en inglés y te autoevalúas. Las expresiones de los audios se pueden añadir con un clic.
 - **Listening con voz por hablante:** Mark habla con voz australiana (`en-AU`) si el dispositivo la tiene. Puedes repetir el audio y ponerlo más lento, y la transcripción aparece al responder.
 - **Responder hablando:** dictado con la Web Speech API en inglés británico, americano o australiano. El texto aparece en directo y luego se puede corregir.
 - **Panel de Delivery:** tiempo hablado, ritmo (palabras por minuto) y muletillas que restan autoridad (*I think, maybe, sorry…*).
 - **Racha diaria y panel de progreso** por bloque y por ámbito (People Analytics, Reuniones, Datos…).
-- **Atajos:** `1`–`4` para elegir opción, `Enter` para continuar y `Esc` para salir.
+- **Copia de seguridad:** exporta e importa tu progreso en un archivo `.json` (para no perderlo o pasarlo a otro dispositivo). Si el progreso guardado se daña, la app no lo sobrescribe: guarda una copia y te avisa.
+- **Sesión a prueba de recargas:** si recargas o cierras la pestaña a mitad de sesión, al volver continúas donde estabas (ese mismo día). El reloj se pausa mientras la pestaña está oculta.
+- **Atajos:** `1`–`4` para elegir opción y `Enter` para continuar. `Esc` pide confirmación antes de salir de la sesión.
 - **PWA instalable y offline.**
 
 ## Estructura
 
 ```
-index.html        Shell de la app (Tailwind CDN, tema oscuro)
-js/data_c1.js     Contenido: 201 ítems en 8 pools, más configuración de sesión y niveles
-js/app.js         Lógica: Store, Content, SRS, Stats, Speech, Voice, Session, Views, App
-manifest.json     Manifest PWA
-sw.js             Service worker (network-first para ficheros propios)
-icons/icon.svg    Icono
+index.html          Shell de la app (Tailwind CDN, tema oscuro)
+js/core.js          Núcleo puro y testeable: Util, SRS, racha, estado/importación, muletillas
+js/data_c1.js       Contenido: 201 ítems en 8 pools, más configuración de sesión y niveles
+js/app.js           App: Store, Content, Stats, Speech, Voice, Session, Views, App
+manifest.json       Manifest PWA
+sw.js               Service worker (network-first con timeout de 3 s)
+icons/icon.svg      Icono
+tests/              Tests del núcleo (node:test, sin dependencias)
+scripts/validate.js Validador del contenido de data_c1.js
+package.json        Scripts: npm test · npm run validate · npm run check
 ```
 
 Cómo se forma la sesión (`SESSION_MIX` en `data_c1.js`):
@@ -63,6 +69,18 @@ Cómo se forma la sesión (`SESSION_MIX` en `data_c1.js`):
   # abre http://localhost:8080
   ```
 - **Publicar:** GitHub Pages, en Settings → Pages → Branch `main` / root.
+
+## Desarrollo
+
+No hay dependencias ni paso de build; solo hace falta Node ≥ 20.
+
+```bash
+npm run check      # valida el contenido y ejecuta los tests (hazlo antes de cada commit)
+npm run validate   # solo el contenido: ids, huecos, opciones, regex de los retos, muletillas…
+npm test           # solo los tests del núcleo
+```
+
+El validador falla (código 1) si hay errores y muestra como avisos lo que conviene revisar, por ejemplo una respuesta modelo con muletillas que el panel de Delivery penalizaría.
 
 ## Voz: compatibilidad
 
@@ -86,9 +104,11 @@ Clave `e20_c1_v1`. Se mantiene desde la v1, así que el progreso antiguo se cons
   items:    { "MM-007": { box, seen, correct, lastSeen } },
   sessions: [{ date, ts, level, score: { vocab: { ok, total }, grammar, listening, challenges } }],
   custom:   [{ id: "U-…", en, es, example, created }],      // banco personal
-  settings: { tts, voice: "en-GB" | "en-US" | "en-AU", level: "b2" | "c1" }
+  settings: { tts, voice: "en-GB" | "en-US" | "en-AU", level: "b2" | "c1", lastExport }
 }
 ```
+
+La sesión en curso se guarda aparte, en `sessionStorage` (clave `e20_session`), y se descarta al terminar, al salir o al cambiar de día.
 
 ## Añadir contenido
 
@@ -105,5 +125,4 @@ Edita `js/data_c1.js`. Los comentarios de cabecera recogen todas las reglas. Las
 - Feedback de IA sobre la respuesta hablada del bloque 4 (gramática y naturalidad).
 - Modo "shadowing": repetir en voz alta cada línea del audio y comparar con el dictado.
 - Más audios con situaciones reales que tú aportes (reuniones recurrentes, proyectos).
-- Exportar e importar el progreso (JSON) para usarlo en varios dispositivos.
 - Compilar Tailwind (CLI) en lugar del CDN de desarrollo.

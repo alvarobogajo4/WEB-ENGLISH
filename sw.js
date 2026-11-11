@@ -1,10 +1,15 @@
-/* Service worker · English 20 Minutes C1
- * - Ficheros propios: network-first (siempre ves la última versión si hay red; offline usa caché).
+/* Service worker · English 20 Minutes
+ * - Ficheros propios: network-first con timeout (3 s). Con red lenta o sin red
+ *   se sirve la caché; la respuesta de red, si llega, actualiza la caché igualmente.
  * - CDN (Tailwind, Google Fonts): stale-while-revalidate.
+ * - Solo se cachean respuestas válidas (nunca 404/500).
+ * - Sin red, solo las navegaciones caen al shell (index.html); un .js que falta
+ *   no recibe HTML a cambio.
  * Sube CACHE_VERSION si cambias la lista de ASSETS.
  */
-const CACHE_VERSION = "e20-c1-v3";
-const ASSETS = ["./", "./index.html", "./js/app.js", "./js/data_c1.js", "./manifest.json", "./icons/icon.svg"];
+const CACHE_VERSION = "e20-c1-v4";
+const ASSETS = ["./", "./index.html", "./js/core.js", "./js/app.js", "./js/data_c1.js", "./manifest.json", "./icons/icon.svg"];
+const NET_TIMEOUT_MS = 3000;
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE_VERSION).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
@@ -18,30 +23,48 @@ self.addEventListener("activate", (e) => {
   );
 });
 
-self.addEventListener("fetch", (e) => {
-  const req = e.request;
-  if (req.method !== "GET") return;
-  const url = new URL(req.url);
+const timeout = (ms) => new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), ms));
 
-  if (url.origin === location.origin) {
-    e.respondWith(
-      fetch(req)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE_VERSION).then((c) => c.put(req, copy));
-          return res;
-        })
-        .catch(() => caches.match(req).then((r) => r || caches.match("./index.html")))
-    );
-    return;
+async function networkFirst(event) {
+  const req = event.request;
+  const cache = await caches.open(CACHE_VERSION);
+  const net = fetch(req).then((res) => {
+    if (res.ok) return cache.put(req, res.clone()).then(() => res);
+    return res;
+  });
+  event.waitUntil(net.catch(() => {})); // deja terminar la actualización de caché aunque ganemos por timeout
+
+  try {
+    const res = await Promise.race([net, timeout(NET_TIMEOUT_MS)]);
+    if (res.ok) return res;
+    return (await cache.match(req)) || res; // 5xx/404: mejor la versión cacheada si existe
+  } catch (_) {
+    const cached = await cache.match(req);
+    if (cached) return cached;
+    if (req.mode === "navigate") {
+      const shell = await cache.match("./index.html");
+      if (shell) return shell;
+    }
+    return net.catch(() => Response.error()); // sin caché: seguimos esperando a la red
   }
+}
 
-  e.respondWith(
-    caches.open(CACHE_VERSION).then((cache) =>
-      cache.match(req).then((cached) => {
-        const net = fetch(req).then((res) => { cache.put(req, res.clone()); return res; }).catch(() => cached);
-        return cached || net;
-      })
-    )
-  );
+async function staleWhileRevalidate(event) {
+  const req = event.request;
+  const cache = await caches.open(CACHE_VERSION);
+  const cached = await cache.match(req);
+  const net = fetch(req).then((res) => {
+    // Las respuestas "opaque" (no-cors, p. ej. el script de Tailwind) no exponen su estado.
+    if (res.ok || res.type === "opaque") return cache.put(req, res.clone()).then(() => res);
+    return res;
+  });
+  event.waitUntil(net.catch(() => {}));
+  return cached || net.catch(() => Response.error());
+}
+
+self.addEventListener("fetch", (e) => {
+  if (e.request.method !== "GET") return;
+  const url = new URL(e.request.url);
+  if (url.protocol !== "http:" && url.protocol !== "https:") return;
+  e.respondWith(url.origin === location.origin ? networkFirst(e) : staleWhileRevalidate(e));
 });

@@ -17,7 +17,8 @@
   "use strict";
 
   const D = window.E20_DATA;
-  if (!D) { document.getElementById("app").textContent = "Error: no se pudo cargar data_c1.js"; return; }
+  const C = window.E20_CORE;
+  if (!D || !C) { document.getElementById("app").textContent = `Error: no se pudo cargar ${!D ? "data_c1.js" : "core.js"}`; return; }
 
   const BLOCK_ORDER = ["vocab", "grammar", "listening", "challenges"];
   const BLOCK_SECONDS = 300;
@@ -38,71 +39,49 @@
   const accentOf = (block) => ACCENT[D.BLOCK_META[block].accent];
 
   /* ------------------------------------------------------------------ Util */
-  const Util = {
-    today() {
-      const d = new Date();
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    },
-    daysBetween(a, b) {
-      const pa = a.split("-").map(Number), pb = b.split("-").map(Number);
-      return Math.round((Date.UTC(pb[0], pb[1] - 1, pb[2]) - Date.UTC(pa[0], pa[1] - 1, pa[2])) / 86400000);
-    },
-    shuffle(arr) {
-      const a = arr.slice();
-      for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
-      return a;
-    },
-    esc(s) {
-      return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-    },
-    mmss(sec) {
-      const s = Math.max(0, Math.abs(sec));
-      return `${sec < 0 ? "+" : ""}${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-    },
-    pct(ok, total) { return total ? Math.round((ok / total) * 100) : null; },
-    escRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); },
-    words(t) { return t.trim() ? t.trim().split(/\s+/).length : 0; },
-    plural(n, one, many) { return `${n} ${n === 1 ? one : many}`; }
-  };
+  const Util = C.Util;
 
   /* ----------------------------------------------------------------- Store */
   const Store = (() => {
     const KEY = "e20_c1_v1"; // se mantiene la clave para conservar el progreso existente
-    const fresh = () => ({
-      version: 2,
-      streak: { current: 0, best: 0, lastDate: null },
-      items: {},       // id → { box, seen, correct, lastSeen }
-      sessions: [],    // { date, ts, level, score: { block: { ok, total } } }
-      custom: [],      // banco personal: { id, en, es, example, created }
-      settings: { tts: true, voice: "en-GB", level: "b2" }
-    });
-    let state = fresh();
+    let state = C.State.fresh();
     let persistent = true;
+    let recoveredKey = null; // clave de la copia del progreso ilegible, si la hubo
 
     function load() {
-      try {
-        const raw = localStorage.getItem(KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          const base = fresh();
-          state = {
-            ...base, ...parsed, version: 2,
-            streak: { ...base.streak, ...(parsed.streak || {}) },
-            settings: { ...base.settings, ...(parsed.settings || {}) },
-            items: parsed.items || {},
-            sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
-            custom: Array.isArray(parsed.custom) ? parsed.custom : []
-          };
-        }
-      } catch (e) { persistent = false; state = fresh(); }
+      let raw = null;
+      try { raw = localStorage.getItem(KEY); }
+      catch (e) { persistent = false; return; } // almacenamiento bloqueado (modo privado…)
+      if (!raw) return;
+      try { state = C.State.normalize(JSON.parse(raw)); }
+      catch (e) {
+        // No sobrescribimos a ciegas: se guarda una copia del contenido ilegible.
+        state = C.State.fresh();
+        try {
+          // Reutiliza la copia si ya existe (evita duplicarla en cada recarga).
+          const prefix = `${KEY}_corrupt_`;
+          recoveredKey = Object.keys(localStorage).find((k) => k.startsWith(prefix) && localStorage.getItem(k) === raw) || null;
+          if (!recoveredKey) { recoveredKey = prefix + Date.now(); localStorage.setItem(recoveredKey, raw); }
+        } catch (_) { recoveredKey = "(no se pudo guardar copia)"; }
+      }
     }
     function save() {
       try { localStorage.setItem(KEY, JSON.stringify(state)); persistent = true; }
       catch (e) { persistent = false; }
     }
-    function reset() { state = fresh(); save(); }
+    function reset() { state = C.State.fresh(); save(); }
+    function replace(next) { state = next; recoveredKey = null; save(); }
+    function dismissRecovered() { recoveredKey = null; }
 
-    return { load, save, reset, get state() { return state; }, get persistent() { return persistent; } };
+    /* Pide al navegador que no borre los datos por falta de espacio o inactividad. */
+    function requestPersist() {
+      try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); } catch (_) {}
+    }
+
+    return {
+      load, save, reset, replace, dismissRecovered, requestPersist,
+      get state() { return state; }, get persistent() { return persistent; }, get recoveredKey() { return recoveredKey; }
+    };
   })();
 
   /* --------------------------------------------------------------- Content */
@@ -138,34 +117,11 @@
 
   /* ------------------------------------------------------------------- SRS */
   const SRS = {
-    // Días hasta la siguiente revisión según la caja (1..5).
-    INTERVAL: { 1: 0, 2: 1, 3: 3, 4: 7, 5: 16 },
-
-    isDue(rec, today) {
-      return !rec.lastSeen || Util.daysBetween(rec.lastSeen, today) >= this.INTERVAL[rec.box];
-    },
+    isDue(rec, today) { return C.SRS.isDue(rec, today); },
 
     /* Elige n ítems de una lista: repasos pendientes + nuevos (+ relleno si no onlyDue). */
     pickFrom(list, n, onlyDue = false) {
-      if (n <= 0 || !list.length) return [];
-      const items = Store.state.items, today = Util.today();
-      const due = [], fresh = [], rest = [];
-      for (const it of list) {
-        const rec = items[it.id];
-        if (!rec) fresh.push(it);
-        else if (this.isDue(rec, today)) due.push(it);
-        else rest.push(it);
-      }
-      due.sort((a, b) => items[a.id].box - items[b.id].box || (items[a.id].lastSeen < items[b.id].lastSeen ? -1 : 1));
-      const maxDue = Math.max(1, Math.ceil(n * 0.6));
-      const picked = due.slice(0, maxDue);
-      for (const it of Util.shuffle(fresh)) { if (picked.length >= n) break; picked.push(it); }
-      for (const it of due.slice(maxDue)) { if (picked.length >= n) break; picked.push(it); }
-      if (!onlyDue) {
-        rest.sort((a, b) => items[a.id].box - items[b.id].box);
-        for (const it of rest) { if (picked.length >= n) break; picked.push(it); }
-      }
-      return picked.slice(0, n);
+      return C.SRS.pickFrom(list, n, Store.state.items, Util.today(), onlyDue);
     },
 
     /* En nivel B2 se priorizan los ítems B2; los C1 solo entran si faltan. */
@@ -181,12 +137,7 @@
 
     record(id, correct) {
       const s = Store.state;
-      const rec = s.items[id] || { box: 1, seen: 0, correct: 0, lastSeen: null };
-      rec.seen += 1;
-      if (correct) { rec.correct += 1; rec.box = Math.min(5, rec.box + 1); }
-      else rec.box = 1;
-      rec.lastSeen = Util.today();
-      s.items[id] = rec;
+      s.items[id] = C.SRS.nextRecord(s.items[id], correct, Util.today());
       Store.save();
     },
 
@@ -198,21 +149,9 @@
 
   /* ----------------------------------------------------------------- Stats */
   const Stats = {
-    streak() {
-      const st = Store.state.streak, today = Util.today();
-      if (!st.lastDate) return { current: 0, best: st.best, doneToday: false };
-      const gap = Util.daysBetween(st.lastDate, today);
-      return { current: gap <= 1 ? st.current : 0, best: st.best, doneToday: gap === 0 };
-    },
+    streak() { return C.Streak.view(Store.state.streak, Util.today()); },
 
-    registerSessionDay() {
-      const st = Store.state.streak, today = Util.today();
-      if (st.lastDate === today) return;
-      const gap = st.lastDate ? Util.daysBetween(st.lastDate, today) : null;
-      st.current = gap === 1 ? st.current + 1 : 1;
-      st.best = Math.max(st.best, st.current);
-      st.lastDate = today;
-    },
+    registerSessionDay() { Store.state.streak = C.Streak.register(Store.state.streak, Util.today()); },
 
     aggregate() {
       const index = Content.index();
@@ -226,7 +165,7 @@
         if (!meta) continue; // ítem eliminado
         byBlock[meta.block].ok += rec.correct; byBlock[meta.block].total += rec.seen;
         if (byDomain[meta.domain]) { byDomain[meta.domain].ok += rec.correct; byDomain[meta.domain].total += rec.seen; }
-        if (rec.box >= 4) { mastered++; byBlock[meta.block].mastered++; }
+        if (rec.box >= C.SRS.MASTERED_BOX) { mastered++; byBlock[meta.block].mastered++; }
       }
       return { byBlock, byDomain, mastered, totalItems: Object.keys(index).length };
     },
@@ -439,19 +378,6 @@
     }
   };
 
-  /* Muletillas y atenuadores que restan autoridad en un registro profesional. */
-  const HEDGES = [
-    { t: "I think", re: /\bI think\b/gi },
-    { t: "maybe", re: /\bmaybe\b/gi },
-    { t: "sorry", re: /\bsorry\b/gi },
-    { t: "I guess", re: /\bI guess\b/gi },
-    { t: "kind of / sort of", re: /\b(kind|sort) of\b/gi },
-    { t: "basically", re: /\bbasically\b/gi },
-    { t: "like", re: /\blike,/gi },
-    { t: "you know", re: /\byou know\b/gi },
-    { t: "um / uh", re: /\b(um+|uh+|erm)\b/gi }
-  ];
-
   /* --------------------------------------------------------------- Session */
   const Session = {
     s: null,
@@ -484,12 +410,75 @@
         answered: false,
         current: null,
         blockStartedAt: null,
+        pausedAt: null,
         startedAt: Date.now()
       };
       this.prepareItem();
       App.view = "session";
       Views.render();
     },
+
+    /* ---- Persistencia de la sesión en curso (sobrevive a una recarga) ----
+     * Se guarda en sessionStorage referenciando los ítems por pool + id. */
+    SNAP_KEY: "e20_session",
+    persist() {
+      const s = this.s;
+      if (!s) return;
+      const ref = (e) => ({ pool: e.pool, kind: e.kind, id: e.it.id });
+      const snap = {
+        ...s,
+        queue: Object.fromEntries(Object.entries(s.queue).map(([k, es]) => [k, es.map(ref)])),
+        misses: s.misses.map(ref),
+        savedAt: Date.now(),
+        day: Util.today()
+      };
+      try { sessionStorage.setItem(this.SNAP_KEY, JSON.stringify(snap)); } catch (_) { /* opcional */ }
+    },
+    clearSnapshot() { try { sessionStorage.removeItem(this.SNAP_KEY); } catch (_) { /* opcional */ } },
+    restore() {
+      let snap = null;
+      try { snap = JSON.parse(sessionStorage.getItem(this.SNAP_KEY) || "null"); } catch (_) { snap = null; }
+      if (!snap || snap.day !== Util.today() || !snap.queue) { this.clearSnapshot(); return false; }
+      const find = (r) => {
+        const it = Content.pool(r.pool).find((x) => x.id === r.id);
+        return it ? { pool: r.pool, kind: r.kind, it } : null;
+      };
+      const queue = {};
+      for (const [k, refs] of Object.entries(snap.queue)) {
+        const es = refs.map(find);
+        if (es.some((e) => !e)) { this.clearSnapshot(); return false; } // el contenido cambió
+        queue[k] = es;
+      }
+      const away = Math.max(0, Date.now() - snap.savedAt); // el tiempo fuera no cuenta
+      const { savedAt, day, ...rest } = snap;
+      this.s = { ...rest, queue, misses: (snap.misses || []).map(find).filter(Boolean), pausedAt: null };
+      if (this.s.blockStartedAt) this.s.blockStartedAt += away;
+      this.s.startedAt += away;
+      if (this.s.phase === "item") this.startTimer();
+      return true;
+    },
+
+    /* ---- Pausa del reloj cuando la pestaña no está visible ---- */
+    pause() {
+      const s = this.s;
+      if (!s) return;
+      if (Voice.active) Voice.stop();
+      if (s.phase === "item" && !s.pausedAt) s.pausedAt = Date.now();
+      this.persist();
+    },
+    resume() {
+      const s = this.s;
+      if (!s || !s.pausedAt) return;
+      const d = Date.now() - s.pausedAt;
+      if (s.blockStartedAt) s.blockStartedAt += d;
+      s.startedAt += d;
+      s.pausedAt = null;
+      Views.updateTimer();
+    },
+
+    /* Salir pide confirmación si ya hay algo hecho. */
+    hasProgress() { const s = this.s; return !!s && (s.blockIdx > 0 || s.phase !== "intro"); },
+    requestExit() { if (this.hasProgress()) Views.showExitAsk(); else this.abort(); },
 
     get blockKey() { return this.s.blocks[this.s.blockIdx]; },
     get entry() { return this.s.queue[this.blockKey][this.s.itemIdx]; },
@@ -527,7 +516,8 @@
     stopTimer() { if (this.timerId) clearInterval(this.timerId); this.timerId = null; },
     remaining() {
       if (!this.s || !this.s.blockStartedAt) return BLOCK_SECONDS;
-      return BLOCK_SECONDS - Math.floor((Date.now() - this.s.blockStartedAt) / 1000);
+      const now = this.s.pausedAt || Date.now();
+      return BLOCK_SECONDS - Math.floor((now - this.s.blockStartedAt) / 1000);
     },
 
     /* Respuesta en ítems de opción múltiple. */
@@ -663,6 +653,7 @@
         if (Store.state.sessions.length > 120) Store.state.sessions = Store.state.sessions.slice(-120);
         Store.save();
       }
+      this.clearSnapshot();
       App.go("summary");
     },
 
@@ -671,6 +662,7 @@
       Speech.stop();
       this.stopTimer();
       this.s = null;
+      this.clearSnapshot();
       App.go("home");
     }
   };
@@ -682,8 +674,9 @@
 
     render() {
       const v = App.view;
+      this.exitAsk = false;
       this.root.innerHTML = v === "home" ? this.home() : v === "session" ? this.session() : this.summary();
-      if (v === "session") this.afterSessionRender();
+      if (v === "session") { this.afterSessionRender(); Session.persist(); }
       // Solo vuelve arriba al cambiar de pantalla / ítem, no al responder dentro del mismo ítem.
       const s = Session.s;
       const key = v === "session" && s ? `${v}|${s.blockIdx}|${s.itemIdx}|${s.phase}` : v;
@@ -779,8 +772,34 @@
             <button data-action="level" data-level="c1" class="rounded-lg bg-emerald-400 px-3 py-1.5 text-xs font-semibold text-zinc-950">Pasar a C1</button></div>`
         : "";
 
+      const recoveredBanner = Store.recoveredKey
+        ? `<div role="alert" class="rounded-xl border border-rose-400/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-100 space-y-2">
+            <p><strong>No se pudo leer tu progreso guardado</strong> porque estaba dañado. No lo hemos borrado: hay una copia en el navegador (<code class="font-mono text-xs">${Util.esc(Store.recoveredKey)}</code>) y la app ha empezado de cero. Si tienes un archivo de copia, impórtalo ahora.</p>
+            <div class="flex gap-3"><button data-action="import" class="rounded-lg bg-rose-300 px-3 py-1.5 text-xs font-semibold text-zinc-950">Importar copia</button>
+            <button data-action="dismiss-recovered" class="text-xs text-rose-200 hover:underline">Entendido</button></div></div>`
+        : "";
+
+      const lastExp = Store.state.settings.lastExport;
+      const expAge = lastExp ? Util.daysBetween(lastExp, Util.today()) : null;
+      const expLabel = lastExp ? (expAge === 0 ? "hoy" : `hace ${Util.plural(expAge, "día", "días")}`) : "nunca";
+      const expNudge = sessionsTotal >= 3 && (expAge === null || expAge > 14);
+      const backupCard = `<div class="rounded-2xl border ${expNudge ? "border-amber-400/30" : "border-zinc-800"} bg-zinc-900/40 p-6">
+          <div class="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 class="text-sm font-semibold text-zinc-200">Copia de seguridad</h2>
+            <span class="text-xs ${expNudge ? "text-amber-300" : "text-zinc-400"}">Última copia: ${expLabel}</span>
+          </div>
+          <p class="mt-1.5 text-xs text-zinc-400 leading-relaxed">Tu progreso y tu banco de palabras solo se guardan en este navegador. Exporta un archivo de vez en cuando (Safari puede borrar los datos de webs que no abres en 7 días) o para pasarlos a otro dispositivo.</p>
+          <div class="mt-4 flex flex-wrap gap-3">
+            <button data-action="export" class="rounded-lg bg-zinc-100 px-4 py-2 text-xs font-semibold text-zinc-900 hover:bg-white transition">Exportar copia (.json)</button>
+            <button data-action="import" class="rounded-lg border border-zinc-700 px-4 py-2 text-xs font-semibold text-zinc-200 hover:border-zinc-500 transition">Importar copia</button>
+            <input type="file" id="import-file" data-action="import-file" accept="application/json,.json" class="hidden">
+          </div>
+          <div id="backup-zone" class="mt-3 text-sm empty:hidden" aria-live="polite"></div>
+        </div>`;
+
       return `
       <section class="space-y-6 fade-in">
+        ${recoveredBanner}
         <div class="rounded-2xl border border-zinc-800 bg-gradient-to-br from-zinc-900 to-zinc-950 p-6 sm:p-8">
           <div class="flex flex-wrap items-start justify-between gap-6">
             <div class="max-w-md">
@@ -856,6 +875,8 @@
           <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">${drillBtns}</div>
         </div>
 
+        ${backupCard}
+
         <div class="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-900 pt-5 text-xs text-zinc-500">
           <label class="inline-flex items-center gap-2 cursor-pointer select-none ${Speech.supported ? "" : "opacity-40 pointer-events-none"}">
             <input type="checkbox" data-action="toggle-tts" class="accent-zinc-300" ${Store.state.settings.tts ? "checked" : ""}> Leer en voz alta al acertar
@@ -885,9 +906,16 @@
       const header = `
         <div class="sticky top-0 z-10 -mx-4 sm:mx-0 px-4 sm:px-0 pt-4 pb-3 bg-zinc-950/90 backdrop-blur">
           <div class="flex items-center justify-between gap-3">
-            <button data-action="abort" class="text-xs text-zinc-500 hover:text-zinc-200 transition">✕ Salir</button>
+            <button data-action="abort" class="text-xs text-zinc-400 hover:text-zinc-100 transition">✕ Salir <kbd class="hidden sm:inline font-mono text-[10px] text-zinc-500">Esc</kbd></button>
             <span class="font-mono text-[11px] ${a.text}">BLOQUE ${m.n} · MIN ${m.minutes}</span>
             <div id="timer" class="font-mono text-sm tabular-nums text-zinc-300 w-14 text-right">${s.phase === "item" ? Util.mmss(S.remaining()) : "05:00"}</div>
+          </div>
+          <div id="exit-ask" role="alertdialog" aria-label="Confirmar salida" class="hidden mt-3 rounded-xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+            <p>¿Salir de la sesión? Lo que ya has respondido cuenta para tus repasos, pero la sesión no se guarda ni suma racha.</p>
+            <div class="mt-2.5 flex gap-3">
+              <button data-action="abort-no" id="exit-no" class="rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-semibold text-zinc-900">Seguir con la sesión</button>
+              <button data-action="abort-yes" class="rounded-lg border border-rose-400/50 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/20">Sí, salir</button>
+            </div>
           </div>
           <div class="mt-3 flex gap-1.5">${segments}</div>
         </div>`;
@@ -1186,6 +1214,20 @@
         </div></div>`;
     },
 
+    exitAsk: false,
+    showExitAsk() {
+      const box = document.getElementById("exit-ask");
+      if (!box) return;
+      this.exitAsk = true;
+      box.classList.remove("hidden");
+      document.getElementById("exit-no").focus();
+    },
+    hideExitAsk() {
+      const box = document.getElementById("exit-ask");
+      this.exitAsk = false;
+      if (box) box.classList.add("hidden");
+    },
+
     afterSessionRender() {
       this.updateTimer();
       this.updateVoiceUI();
@@ -1288,7 +1330,7 @@
 
     deliveryPanel(c) {
       const spoke = c.voice && c.voice.ms >= 5000;
-      const hedges = HEDGES.map((h) => ({ t: h.t, n: (c.text.match(h.re) || []).length })).filter((h) => h.n);
+      const hedges = C.countHedges(c.text);
 
       let pace = "";
       if (spoke) {
@@ -1375,10 +1417,54 @@
 
     init() {
       Store.load();
+      Store.requestPersist();
       Speech.init();
       this.bind();
+      if (Session.restore()) this.view = "session";
       Views.render();
       this.registerSW();
+    },
+
+    /* ---- Copia de seguridad ---- */
+    pendingImport: null,
+    backupMsg(text, tone = "text-zinc-300") {
+      const z = document.getElementById("backup-zone");
+      if (z) z.innerHTML = `<p class="${tone}">${Util.esc(text)}</p>`;
+    },
+    exportProgress() {
+      Store.state.settings.lastExport = Util.today();
+      Store.save();
+      const data = JSON.stringify(C.State.toExport(Store.state), null, 2);
+      const url = URL.createObjectURL(new Blob([data], { type: "application/json" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `english20-progreso-${Util.today()}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      this.go("home");
+      this.backupMsg("Copia descargada. Guárdala en OneDrive o en el móvil.", "text-emerald-300");
+    },
+    async readImport(file) {
+      if (!file) return;
+      if (file.size > 5 * 1024 * 1024) return this.backupMsg("El archivo es demasiado grande para ser una copia de la app.", "text-rose-300");
+      try {
+        const next = C.State.fromImport(await file.text());
+        this.pendingImport = next;
+        const cur = C.State.summary(Store.state), inc = C.State.summary(next);
+        const z = document.getElementById("backup-zone");
+        if (!z) return;
+        z.innerHTML = `<div class="rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-amber-100 space-y-2">
+          <p>Esto <strong>reemplaza</strong> tu progreso actual por el del archivo.</p>
+          <ul class="text-xs text-amber-200/90 tabular-nums">
+            <li>Ahora: ${Util.plural(cur.sessions, "sesión", "sesiones")} · ${Util.plural(cur.items, "ítem", "ítems")} · ${Util.plural(cur.words, "palabra", "palabras")}</li>
+            <li>Archivo: ${Util.plural(inc.sessions, "sesión", "sesiones")} · ${Util.plural(inc.items, "ítem", "ítems")} · ${Util.plural(inc.words, "palabra", "palabras")}</li>
+          </ul>
+          <div class="flex gap-3 pt-1"><button data-action="import-yes" class="rounded-lg bg-amber-400 px-3 py-1.5 text-xs font-semibold text-zinc-950">Reemplazar</button>
+          <button data-action="import-no" class="text-xs hover:underline">Cancelar</button></div></div>`;
+      } catch (err) {
+        this.pendingImport = null;
+        this.backupMsg(err.message || "No se pudo leer el archivo.", "text-rose-300");
+      }
     },
 
     bind() {
@@ -1400,8 +1486,20 @@
           case "next": Session.next(); break;
           case "evaluate": Session.evaluateChallenge(); break;
           case "finish-challenge": Session.finishChallenge(); break;
-          case "abort": Session.abort(); break;
-          case "home": Session.s = null; this.go("home"); break;
+          case "abort": Session.requestExit(); break;
+          case "abort-yes": Session.abort(); break;
+          case "abort-no": Views.hideExitAsk(); break;
+          case "home": Session.s = null; Session.clearSnapshot(); this.go("home"); break;
+          case "export": this.exportProgress(); break;
+          case "import": { const f = document.getElementById("import-file"); if (f) { f.value = ""; f.click(); } break; }
+          case "import-yes":
+            if (this.pendingImport) {
+              Store.replace(this.pendingImport); this.pendingImport = null; Session.clearSnapshot();
+              this.go("home"); this.backupMsg("Progreso importado.", "text-emerald-300");
+            }
+            break;
+          case "import-no": this.pendingImport = null; this.backupMsg(""); break;
+          case "dismiss-recovered": Store.dismissRecovered(); this.go("home"); break;
           case "speak": Speech.say(el.dataset.text, { lang: el.dataset.lang || undefined }); break;
           case "mic": Voice.toggle(); break;
           case "level": Store.state.settings.level = el.dataset.level; Store.save(); this.go("home"); break;
@@ -1432,15 +1530,24 @@
         const el = e.target;
         if (el.dataset.action === "toggle-tts") { Store.state.settings.tts = el.checked; Store.save(); }
         if (el.dataset.action === "voice") { Store.state.settings.voice = el.value; Store.save(); Speech.say("Hi! This is how I sound.", { lang: el.value }); }
-        if (el.dataset.action === "check" && Session.s) { Session.s.current.checks[Number(el.dataset.idx)] = el.checked; }
+        if (el.dataset.action === "check" && Session.s) { Session.s.current.checks[Number(el.dataset.idx)] = el.checked; Session.persist(); }
+        if (el.dataset.action === "import-file") this.readImport(el.files && el.files[0]);
       });
 
       root.addEventListener("input", (e) => {
         if (e.target.id === "challenge-text" && Session.s) {
           Session.s.current.text = e.target.value;
           Views.updateChallengeLive();
+          Session.persist();
         }
       });
+
+      // Reloj en pausa con la pestaña oculta; la sesión se guarda al salir o recargar.
+      document.addEventListener("visibilitychange", () => {
+        if (this.view !== "session" || !Session.s) return;
+        if (document.hidden) Session.pause(); else Session.resume();
+      });
+      window.addEventListener("pagehide", () => { if (this.view === "session" && Session.s) Session.pause(); });
 
       document.addEventListener("keydown", (e) => {
         if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -1448,6 +1555,9 @@
         const typing = tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT";
         if (this.view === "home" && e.key === "Enter" && !typing && tag !== "BUTTON") { e.preventDefault(); Session.start("full"); return; }
         if (this.view !== "session" || !Session.s) return;
+        // Con la confirmación de salida abierta: Esc la cierra y Enter activa el botón enfocado.
+        if (Views.exitAsk) { if (e.key === "Escape") { e.preventDefault(); Views.hideExitAsk(); } return; }
+        if (e.key === "Escape") { e.preventDefault(); Session.requestExit(); return; }
         if (e.target.id === "card-attempt" && e.key === "Enter") { e.preventDefault(); Session.revealCard(); return; }
         if (typing) return;
         if (/^[1-4]$/.test(e.key) && OPTION_KINDS.includes(Session.kind)) { Session.choose(Number(e.key) - 1); return; }
@@ -1455,7 +1565,6 @@
           const btn = document.getElementById("primary-btn");
           if (btn && !btn.disabled) { e.preventDefault(); btn.click(); }
         }
-        if (e.key === "Escape") Session.abort();
       });
     },
 
