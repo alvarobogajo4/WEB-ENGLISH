@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="es" class="bg-zinc-950">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>English 20 Minutes · C1 Executive</title>
+  <meta name="description" content="20 minutos diarios para pasar de inglés intermedio a C1 ejecutivo: registro, phrasal verbs corporativos, trampas del español y producción activa.">
+  <meta name="theme-color" content="#09090b">
+  <meta name="color-scheme" content="dark">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
+            mono: ["JetBrains Mono", "ui-monospace", "monospace"]
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    body { background: #09090b; -webkit-font-smoothing: antialiased; }
+    .fade-in { animation: fade .25s ease-out both; }
+    @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    @media (prefers-reduced-motion: reduce) { .fade-in { animation: none; } }
+    button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid #a1a1aa; outline-offset: 2px; }
+    ::selection { background: rgba(251, 191, 36, .25); }
+  </style>
+</head>
+<body class="min-h-screen font-sans text-zinc-200">
+  <header class="border-b border-zinc-900">
+    <div class="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between">
+      <a href="./" class="flex items-center gap-2.5">
+        <img src="./icons/icon.svg" alt="" class="w-7 h-7">
+        <span class="text-sm font-semibold tracking-tight text-zinc-100">English 20 Minutes</span>
+        <span class="rounded border border-zinc-700 px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">C1 EXECUTIVE</span>
+      </a>
+      <span class="hidden sm:block text-xs text-zinc-500">Lexical Approach · Spaced repetition</span>
+    </div>
+  </header>
+
+  <main id="app" class="max-w-5xl mx-auto px-4 py-6 sm:py-8" aria-live="polite">
+    <noscript><p class="text-zinc-400">Esta app necesita JavaScript.</p></noscript>
+  </main>
+
+  <script src="./js/data_c1.js"></script>
+  <script src="./js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "English 20 Minutes · C1 Executive",
+  "short_name": "English C1",
+  "description": "20 minutos diarios para pasar de intermedio a C1 ejecutivo.",
+  "lang": "es",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "icons": [
+    { "src": "./icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
