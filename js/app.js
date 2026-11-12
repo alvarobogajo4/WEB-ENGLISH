@@ -1607,11 +1607,23 @@
       if (!file) return;
       if (file.size > 5 * 1024 * 1024) return this.backupMsg("El archivo es demasiado grande para ser una copia de la app.", "text-rose-300");
       try {
-        const next = C.State.fromImport(await file.text());
-        this.pendingImport = next;
-        const cur = C.State.summary(Store.state), inc = C.State.summary(next);
+        const parsed = C.State.parseFile(await file.text());
         const z = document.getElementById("backup-zone");
         if (!z) return;
+        if (parsed.kind === "bank") {
+          // Archivo de vocabulario (/fluidez-activa): se AÑADE al banco, no reemplaza nada.
+          const preview = C.Bank.merge(Store.state.custom, parsed.words, Util.today());
+          if (!preview.added) { this.pendingImport = null; return this.backupMsg(`Las ${Util.plural(parsed.words.length, "expresión", "expresiones")} del archivo ya estaban en tu banco.`, "text-zinc-300"); }
+          this.pendingImport = { bank: parsed.words };
+          z.innerHTML = `<div class="rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-4 text-emerald-100 space-y-2">
+            <p>Archivo de vocabulario: se <strong>añaden ${Util.plural(preview.added, "expresión", "expresiones")}</strong> a tu banco${preview.skipped ? ` (${preview.skipped} ya ${preview.skipped === 1 ? "estaba" : "estaban"})` : ""}. Tu progreso no cambia.</p>
+            <div class="flex gap-3 pt-1"><button data-action="import-yes" class="rounded-lg bg-emerald-400 px-3 py-1.5 text-xs font-semibold text-zinc-950">Añadir al banco</button>
+            <button data-action="import-no" class="text-xs hover:underline">Cancelar</button></div></div>`;
+          return;
+        }
+        const next = parsed.state;
+        this.pendingImport = next;
+        const cur = C.State.summary(Store.state), inc = C.State.summary(next);
         z.innerHTML = `<div class="rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-amber-100 space-y-2">
           <p>Esto <strong>reemplaza</strong> tu progreso actual por el del archivo.</p>
           <ul class="text-xs text-amber-200/90 tabular-nums">
@@ -1653,7 +1665,11 @@
           case "export": this.exportProgress(); break;
           case "import": { const f = document.getElementById("import-file"); if (f) { f.value = ""; f.click(); } break; }
           case "import-yes":
-            if (this.pendingImport) {
+            if (this.pendingImport && this.pendingImport.bank) {
+              const r = C.Bank.merge(Store.state.custom, this.pendingImport.bank, Util.today());
+              Store.state.custom = r.custom; Store.save(); this.pendingImport = null;
+              this.go("home"); this.backupMsg(`${Util.plural(r.added, "expresión añadida", "expresiones añadidas")} a tu banco. Entrarán en tus repasos.`, "text-emerald-300");
+            } else if (this.pendingImport) {
               Store.replace(this.pendingImport); this.pendingImport = null; Session.clearSnapshot();
               this.go("home"); this.backupMsg("Progreso importado.", "text-emerald-300");
             }

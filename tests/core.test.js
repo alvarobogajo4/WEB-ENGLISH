@@ -1,7 +1,7 @@
 /* Tests del núcleo puro. Ejecutar: npm test  (o: node --test tests/) */
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { Util, SRS, Errors, Mastery, Level, Streak, State, countHedges } = require("../js/core.js");
+const { Util, SRS, Errors, Mastery, Level, Streak, State, Bank, countHedges } = require("../js/core.js");
 
 /* Registro SM-2 abreviado para los tests. */
 const R = (o = {}) => ({ ...SRS.blank(), seen: 1, correct: 1, ...o });
@@ -340,6 +340,27 @@ test("importar rechaza archivos que no son de la app", () => {
   assert.throws(() => State.fromImport("no es json"), /JSON/);
   assert.throws(() => State.fromImport(JSON.stringify({ foo: 1 })), /no parece/);
   assert.throws(() => State.fromImport("[]"), /no parece/);
+});
+
+/* ------------------------------------------------------------------ Bank */
+test("banco: el archivo de vocabulario se reconoce y no se confunde con una copia completa", () => {
+  const file = JSON.stringify(Bank.toFile([{ en: "fair enough", es: "es razonable", example: "Fair enough — let's do it your way." }, { en: "", es: "x" }]));
+  const r = State.parseFile(file);
+  assert.equal(r.kind, "bank");
+  assert.deepEqual(r.words, [{ en: "fair enough", es: "es razonable", example: "Fair enough — let's do it your way." }]);
+  const full = State.parseFile(JSON.stringify(State.toExport(State.fresh())));
+  assert.equal(full.kind, "state");
+  assert.throws(() => State.parseFile(JSON.stringify({ app: "english-20-minutes", kind: "bank", words: [] })), /palabras/);
+});
+
+test("banco: merge añade solo lo nuevo, sin duplicar ids ni mayúsculas", () => {
+  const custom = [{ id: "U-1", en: "Arvo", es: "tarde", example: "", created: "2026-11-10" }];
+  const r = Bank.merge(custom, [{ en: "arvo", es: "tarde" }, { en: "fair enough", es: "vale" }, { en: "to be fair", es: "siendo justos" }, { en: "Fair Enough", es: "dup" }], "2026-11-12", "abc");
+  assert.equal(r.added, 2);
+  assert.equal(r.skipped, 2);
+  assert.deepEqual(r.custom.map((w) => w.en), ["Arvo", "fair enough", "to be fair"]);
+  assert.equal(new Set(r.custom.map((w) => w.id)).size, 3);
+  assert.equal(custom.length, 1); // no muta el original
 });
 
 /* ---------------------------------------------------------------- Hedges */

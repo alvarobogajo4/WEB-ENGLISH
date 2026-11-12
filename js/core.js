@@ -7,6 +7,7 @@
  *   Errors     → patrones de error recurrentes (aislado / emergente / crítico / superado)
  *   Mastery    → dominio en estrellas (0–5) por destreza o ámbito
  *   Level      → dificultad adaptativa (subir a C1 / consolidar en B2)
+ *   Bank       → archivos de vocabulario para añadir al banco (puente con /fluidez-activa)
  *   Streak     → racha diaria
  *   State      → estado inicial, normalización y validación de importaciones
  *   Hedges     → detección de muletillas que restan autoridad
@@ -400,6 +401,16 @@
       return State.normalize(raw);
     },
 
+    /* Lee cualquier archivo de la app y dice qué es:
+     *   { kind: "bank", words }  → palabras para AÑADIR al banco (p. ej. desde /fluidez-activa)
+     *   { kind: "state", state } → copia de seguridad completa (REEMPLAZA el progreso) */
+    parseFile(text) {
+      let data;
+      try { data = JSON.parse(text); } catch (_) { throw new Error("El archivo no es un JSON válido."); }
+      if (isObj(data) && data.app === "english-20-minutes" && data.kind === Bank.KIND) return { kind: "bank", words: Bank.parse(data) };
+      return { kind: "state", state: State.fromImport(text) };
+    },
+
     summary(state) {
       return {
         streak: state.streak.best || 0,
@@ -407,6 +418,43 @@
         words: state.custom.length,
         items: Object.keys(state.items).length
       };
+    }
+  };
+
+  /* ------------------------------------------------------------------ Bank */
+  /* Archivo de palabras para añadir al banco personal sin tocar el resto del progreso.
+   * Lo genera scripts/fluidez.js (skill /fluidez-activa) y lo importa la app:
+   *   { app: "english-20-minutes", format: 1, kind: "bank", exportedAt, words: [{ en, es, example }] } */
+  const Bank = {
+    KIND: "bank",
+    MAX_WORDS: 500,
+    clean(w) {
+      if (!isObj(w)) return null;
+      const en = str(w.en, 80).trim(), es = str(w.es, 80).trim();
+      return en && es ? { en, es, example: str(w.example, 160).trim() } : null;
+    },
+    toFile(words, now = new Date()) {
+      return { app: "english-20-minutes", format: 1, kind: Bank.KIND, exportedAt: now.toISOString(), words: words.map(Bank.clean).filter(Boolean) };
+    },
+    parse(data) {
+      if (!isObj(data) || !Array.isArray(data.words)) throw new Error("El archivo de vocabulario no tiene palabras.");
+      const words = data.words.slice(0, Bank.MAX_WORDS).map(Bank.clean).filter(Boolean);
+      if (!words.length) throw new Error("El archivo de vocabulario no tiene palabras válidas.");
+      return words;
+    },
+    /* Añade al banco las palabras que no estén ya (sin distinguir mayúsculas). */
+    merge(custom, words, today, idBase = Date.now().toString(36)) {
+      const have = new Set(custom.map((w) => w.en.toLowerCase()));
+      const out = custom.slice();
+      let added = 0;
+      for (const w of words) {
+        const k = w.en.toLowerCase();
+        if (have.has(k)) continue;
+        have.add(k);
+        out.push({ id: `U-${idBase}${added.toString(36)}`, en: w.en, es: w.es, example: w.example || "", created: today });
+        added++;
+      }
+      return { custom: out, added, skipped: words.length - added };
     }
   };
 
@@ -435,7 +483,7 @@
       .filter((h) => h.n);
   }
 
-  const Core = { Util, SRS, Errors, Mastery, Level, Streak, State, HEDGES, countHedges };
+  const Core = { Util, SRS, Errors, Mastery, Level, Streak, State, Bank, HEDGES, countHedges };
   root.E20_CORE = Core;
   if (typeof module !== "undefined" && module.exports) module.exports = Core;
 })(typeof window !== "undefined" ? window : globalThis);

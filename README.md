@@ -53,7 +53,10 @@ sw.js               Service worker (network-first con timeout de 3 s)
 icons/icon.svg      Icono
 tests/              Tests del núcleo (node:test, sin dependencias)
 scripts/validate.js Validador del contenido de data_c1.js
-package.json        Scripts: npm test · npm run validate · npm run check
+scripts/fluidez.js  Progreso de la skill /fluidez-activa (estado · registrar · banco)
+.claude/skills/     Skill fluidez-activa (tutor de conversación en Claude Code)
+progreso/           Tus datos de fluidez activa (personales: fuera de git)
+package.json        Scripts: npm test · npm run validate · npm run check · npm run fluidez
 ```
 
 Cómo se forma la sesión (`SESSION_MIX` en `data_c1.js`):
@@ -64,6 +67,26 @@ Cómo se forma la sesión (`SESSION_MIX` en `data_c1.js`):
 | Gramática | 5 gramática + 2 trampas | 4 + 2 |
 | Comprensión | 2 audios | 2 audios |
 | Producción | 1 reto | 1 reto |
+
+## Tutor de fluidez en Claude Code
+
+La app entrena sobre todo el **reconocimiento**: eliges entre opciones. Para que lo que reconoces te **salga al hablar**, el proyecto incluye la skill `/fluidez-activa` (en `.claude/skills/fluidez-activa/`). Al abrir Claude Code en esta carpeta y escribir `/fluidez-activa` (opcionalmente con un tema), recibes una lección de unos 20 minutos:
+
+| Bloque | Min | Qué entrena |
+|---|---|---|
+| Calentamiento | 3 | Recuperar los chunks que tocan hoy a partir de situaciones nuevas |
+| Chunks nuevos | 4 | 4–5 expresiones completas del tema y una frase personal con cada una |
+| Producción forzada | 6 | 3 rondas de 2–4 frases con 3–5 chunks obligatorios, de más a menos guiada, y la última con réplica |
+| Circunloquio | 3 | Explicar en inglés una palabra que no sabes, sin decirla (*It's a kind of…*) |
+| Ráfaga anti-traducción | 2 | 4 preguntas para responder en menos de 10 s; solo cuenta la soltura |
+| Cierre | 1 | Registro automático del progreso y archivo de chunks para la app |
+
+**Cómo se conecta con la app:**
+- **De la app al tutor:** exporta una copia desde el panel y el tutor la encuentra sola (la busca en Descargas, el Escritorio de OneDrive o esta carpeta). De ahí saca tus **errores recurrentes** y las palabras del banco que aún no dominas, y las convierte en producción obligatoria.
+- **Del tutor a la app:** al cerrar, `node scripts/fluidez.js banco` crea `progreso/banco-para-app-AAAA-MM-DD.json`. Si lo importas en la app, esos chunks se **añaden** a tu banco y entran en el repaso diario. Tu progreso no cambia.
+- **El mismo algoritmo:** el progreso de los chunks usa el SM-2 de `js/core.js`. Un chunk es **activo** cuando lo produces bien en 3 repasos espaciados.
+
+Para ver tu estado sin abrir una lección: `npm run fluidez`.
 
 ## Ejecutar
 
