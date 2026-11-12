@@ -21,11 +21,13 @@ En el panel eliges el nivel.
 - **B2 (por defecto):** prioriza el contenido B2, es decir, frases directas y gramática base. El C1 solo entra si no queda B2 pendiente.
 - **C1:** mezcla todo y añade el registro ejecutivo (*greenlight an initiative, move the needle…*).
 
-La app te propone subir de nivel cuando superas el 85 % en 5 sesiones seguidas.
+La dificultad se adapta: la app te propone subir a C1 cuando superas el 85 % en 5 sesiones seguidas en B2. Si en C1 encadenas 3 sesiones por debajo del 60 %, te sugiere consolidar unos días en B2. Con preguntas de opción múltiple, la zona en la que más se aprende está entre el 70 y el 85 % de aciertos.
 
 ## Funcionalidades
 
-- **Repetición espaciada (Leitner, 5 cajas):** un fallo devuelve el ítem a la caja 1 y cada acierto **en su fecha de repaso** lo sube una (revisión a 0, 1, 3, 7 y 16 días). Acertar antes de tiempo (segunda sesión del día, refuerzos) cuenta en tu historial pero no adelanta el calendario.
+- **Repetición espaciada SM-2** (el algoritmo de SuperMemo, adaptado de [m98/fluent](https://github.com/m98/fluent), licencia MIT): cada respuesta recibe una nota de 0 a 5 y cada ítem tiene su propio factor de facilidad. Los aciertos alejan el repaso (1, 6, 15, 38 días… hasta 180) y un fallo lo devuelve al principio para ese mismo día. Las tarjetas de tu banco se autoevalúan con tres botones (*No lo sabía* / *Con dudas* / *Lo sabía*, también con las teclas `1`–`3`): *Con dudas* cuenta como acierto, pero el repaso vuelve antes. Acertar antes de tiempo cuenta en tu historial pero no adelanta el calendario. El progreso de la versión anterior (cajas Leitner) se migra automáticamente.
+- **Errores recurrentes:** cada ítem pertenece a un patrón (una regla de gramática, un tipo de trampa del español, una función de conversación, un tipo de vocabulario o un hablante del listening). La app guarda tus fallos con *tu respuesta → la correcta*. Con 2–3 fallos en 30 días el patrón es **emergente** y con 4 o más, **crítico**. Las sesiones diarias dan prioridad a esos patrones, y el botón **Repasar mis errores** prepara un repaso solo con ellos. Un patrón queda **superado** con 3 aciertos seguidos, el último en un día posterior al último fallo.
+- **Resumen con avances y foco:** al terminar ves qué patrones has superado, cuáles empeoran y los 3 en los que conviene centrarse en la próxima sesión.
 - **Banco personal de vocabulario:** apuntas las palabras que oyes en reuniones (también desde el móvil) y se repasan como tarjetas: ves el significado en español, intentas decirlo en inglés y te autoevalúas. Las expresiones de los audios se pueden añadir con un clic.
 - **Listening con voz por hablante:** Mark habla con voz australiana (`en-AU`) si el dispositivo la tiene. Puedes repetir el audio y ponerlo más lento, y la transcripción aparece al responder.
 - **Responder hablando:** dictado con la Web Speech API en inglés británico, americano o australiano. El texto aparece en directo y luego se puede corregir.
@@ -33,7 +35,7 @@ La app te propone subir de nivel cuando superas el 85 % en 5 sesiones seguidas.
 - **Registro marcado:** las expresiones C1 indican si son naturales, formales o **jerga corporativa** que conviene usar con moderación.
 - **Distractores exigentes:** las opciones incorrectas son gramaticales pero peores (tono, matiz) o tienen un único error típico del hispanohablante (*explain you, until Thursday, rotation…*).
 - **Privacidad:** el dictado lo procesa el navegador en servidores externos. La app lo avisa: no dictes datos reales de la empresa.
-- **Racha diaria y panel de progreso** por bloque y por ámbito (People Analytics, Reuniones, Datos…).
+- **Racha diaria y panel de progreso** por bloque y por ámbito (People Analytics, Reuniones, Datos…), con **dominio de 0 a 5 ★**. Las estrellas salen de la precisión (90/80/65/50/30 %), pero 4★ exige tener dominado el 25 % del contenido y 5★, el 50 %. Así acertar unas pocas preguntas fáciles no da la máxima nota.
 - **Copia de seguridad:** exporta e importa tu progreso en un archivo `.json` (para no perderlo o pasarlo a otro dispositivo). Si el progreso guardado se daña, la app no lo sobrescribe: guarda una copia y te avisa.
 - **Sesión a prueba de recargas:** si recargas o cierras la pestaña a mitad de sesión, al volver continúas donde estabas (ese mismo día). El reloj se pausa mientras la pestaña está oculta.
 - **Atajos:** `1`–`4` para elegir opción y `Enter` para continuar. `Esc` pide confirmación antes de salir de la sesión.
@@ -43,7 +45,7 @@ La app te propone subir de nivel cuando superas el 85 % en 5 sesiones seguidas.
 
 ```
 index.html          Shell de la app (Tailwind CDN, tema oscuro)
-js/core.js          Núcleo puro y testeable: Util, SRS, racha, estado/importación, muletillas
+js/core.js          Núcleo puro y testeable: Util, SRS (SM-2), Errors, Mastery, Level, racha, estado/importación, muletillas
 js/data_c1.js       Contenido: 300 ítems en 10 pools, más configuración de sesión y niveles
 js/app.js           App: Store, Content, Stats, Speech, Voice, Session, Views, App
 manifest.json       Manifest PWA

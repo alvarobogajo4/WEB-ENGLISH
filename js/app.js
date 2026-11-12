@@ -5,8 +5,8 @@
  *   Util      → helpers de fechas, DOM, aleatoriedad
  *   Store     → persistencia en localStorage (versionada, tolerante a fallos)
  *   Content   → acceso a pools de contenido (incluido el banco personal)
- *   SRS       → repetición espaciada tipo Leitner (5 cajas) por id de ítem
- *   Stats     → agregados para el panel (precisión por bloque / ámbito)
+ *   SRS       → repetición espaciada SM-2 por id de ítem + registro de patrones de error
+ *   Stats     → agregados para el panel (precisión, estrellas, errores recurrentes, nivel)
  *   Speech    → síntesis de voz (pronunciación y audios de listening, voz por hablante)
  *   Voice     → dictado (reconocimiento de voz) para el bloque de producción
  *   Session   → motor de la sesión de 20 min (4 bloques × 5 min)
@@ -23,12 +23,19 @@
   const BLOCK_ORDER = ["vocab", "grammar", "listening", "challenges"];
   const BLOCK_SECONDS = 300;
   const CUSTOM_PER_SESSION = 2;
+  const ERRORS_PER_BLOCK = 6; // ítems por bloque en el repaso de errores
+  const ERROR_BLOCKS = ["vocab", "grammar"]; // bloques rápidos donde se repasan los patrones
   const OPTION_KINDS = ["register", "gap", "move", "trap"];
   const POOL_KIND = {
     registerUpgrade: "register", collocations: "gap", hrVocab: "gap", everydayVocab: "gap", grammar: "gap",
     meetingMoves: "move", conversation: "move", traps: "trap", listening: "listen", challenges: "challenge", custom: "card"
   };
   const VOCAB_TYPE = { phrasal: "Phrasal verb", idiom: "Expresión", collocation: "Colocación", word: "Palabra" };
+  const ERROR_STATUS = {
+    critical: { label: "Crítico", cls: "bg-rose-500/15 text-rose-300" },
+    emerging: { label: "Emergente", cls: "bg-amber-400/15 text-amber-300" },
+    resolved: { label: "Superado", cls: "bg-emerald-500/15 text-emerald-300" }
+  };
   /* Registro de la versión "buena" en registerUpgrade. */
   const TONE = {
     natural:  { label: "Natural", cls: "bg-emerald-500/10 text-emerald-300", note: "" },
@@ -99,6 +106,35 @@
       return D.BLOCKS[name] || [];
     },
     levelOf(it, pool) { return it.level || D.POOL_DEFAULT_LEVEL[pool]; },
+    /* Patrón de error al que pertenece un ítem: { key, label }. La clave es estable
+     * (se guarda en el progreso); la etiqueta es la que se muestra. */
+    patternOf(pool, it) {
+      switch (pool) {
+        case "grammar": return { key: `g:${it.topic}`, label: `Gramática · ${it.topic}` };
+        case "traps": return { key: `t:${it.category}`, label: `Trampa · ${D.TRAP_CATEGORIES[it.category] || it.category}` };
+        case "meetingMoves":
+        case "conversation": return { key: `f:${it.fn}`, label: `${pool === "meetingMoves" ? "Reunión" : "Conversación"} · ${D.MOVE_FUNCTIONS[it.fn] || it.fn}` };
+        case "everydayVocab":
+        case "collocations":
+        case "hrVocab": {
+          const t = it.type || pool;
+          return { key: `v:${t}`, label: `Vocabulario · ${t === "HR term" ? "Términos de HR" : VOCAB_TYPE[t] || D.POOL_LABEL[pool]}` };
+        }
+        case "registerUpgrade": return { key: `r:${it.tone || "c1"}`, label: `Registro C1 · ${TONE[it.tone] ? TONE[it.tone].label : "General"}` };
+        case "listening": {
+          const counts = {};
+          for (const l of it.lines) counts[l.who] = (counts[l.who] || 0) + 1;
+          const who = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+          const sp = D.SPEAKERS[who];
+          return { key: `l:${who}`, label: `Listening · ${sp ? `${sp.name} (${sp.lang.slice(3)})` : who}` };
+        }
+        case "challenges": return it.context === "social"
+          ? { key: "c:social", label: "Producción · Conversación social" }
+          : { key: "c:work", label: "Producción · Trabajo" };
+        case "custom": return { key: "u:bank", label: "Mi banco de vocabulario" };
+        default: return { key: `p:${pool}`, label: D.POOL_LABEL[pool] || pool };
+      }
+    },
     /* id → { pool, block, domain } de todo el contenido, incluido el banco personal. */
     index() {
       const map = {};
@@ -127,25 +163,34 @@
   const SRS = {
     isDue(rec, today) { return C.SRS.isDue(rec, today); },
 
-    /* Elige n ítems de una lista: repasos pendientes + nuevos (+ relleno si no onlyDue). */
-    pickFrom(list, n, onlyDue = false) {
-      return C.SRS.pickFrom(list, n, Store.state.items, Util.today(), onlyDue);
+    /* Elige n ítems de una lista: repasos pendientes + nuevos (+ relleno si no onlyDue).
+     * prefer(it) → true adelanta los ítems de patrones de error activos. */
+    pickFrom(list, n, onlyDue = false, prefer = null) {
+      return C.SRS.pickFrom(list, n, Store.state.items, Util.today(), onlyDue, Math.random, prefer);
     },
 
     /* En nivel B2 se priorizan los ítems B2; los C1 solo entran si faltan. */
-    pick(pool, n, level, onlyDue = false) {
+    pick(pool, n, level, onlyDue = false, weak = null) {
       const all = Content.pool(pool);
-      if (level === "c1") return this.pickFrom(all, n, onlyDue);
+      const prefer = weak && weak.size ? (it) => weak.has(Content.patternOf(pool, it).key) : null;
+      if (level === "c1") return this.pickFrom(all, n, onlyDue, prefer);
       const pref = all.filter((it) => Content.levelOf(it, pool) === "b2");
       const others = all.filter((it) => Content.levelOf(it, pool) !== "b2");
-      const out = this.pickFrom(pref, n, onlyDue);
-      if (out.length < n) out.push(...this.pickFrom(others, n - out.length, onlyDue));
+      const out = this.pickFrom(pref, n, onlyDue, prefer);
+      if (out.length < n) out.push(...this.pickFrom(others, n - out.length, onlyDue, prefer));
       return out;
     },
 
-    record(id, correct) {
-      const s = Store.state;
-      s.items[id] = C.SRS.nextRecord(s.items[id], correct, Util.today());
+    /* Patrones activos (críticos y emergentes) como conjunto de claves. */
+    weakKeys() { return new Set(C.Errors.ranked(Store.state.errors, Util.today()).map((x) => x.key)); },
+
+    /* Registra una respuesta con su calidad SM-2 (0–5) y actualiza su patrón de error.
+     * example = { given, expected } para guardar "tu respuesta → la correcta" si falla. */
+    record(entry, q, example = null) {
+      const s = Store.state, today = Util.today(), { pool, it } = entry;
+      s.items[it.id] = C.SRS.nextRecord(s.items[it.id], q, today);
+      const pat = Content.patternOf(pool, it);
+      s.errors = C.Errors.record(s.errors, pat.key, pat.label, C.SRS.isCorrect(q), today, example ? { id: it.id, ...example } : null);
       Store.save();
     },
 
@@ -165,18 +210,26 @@
       const index = Content.index();
       const byBlock = {}, byDomain = {};
       BLOCK_ORDER.forEach((k) => (byBlock[k] = { ok: 0, total: 0, mastered: 0, size: 0 }));
-      Object.keys(D.DOMAINS).forEach((k) => (byDomain[k] = { ok: 0, total: 0 }));
-      for (const meta of Object.values(index)) byBlock[meta.block].size++;
+      Object.keys(D.DOMAINS).forEach((k) => (byDomain[k] = { ok: 0, total: 0, mastered: 0, size: 0 }));
+      for (const meta of Object.values(index)) {
+        byBlock[meta.block].size++;
+        if (byDomain[meta.domain]) byDomain[meta.domain].size++;
+      }
       let mastered = 0;
       for (const [id, rec] of Object.entries(Store.state.items)) {
         const meta = index[id];
         if (!meta) continue; // ítem eliminado
+        const dom = byDomain[meta.domain];
         byBlock[meta.block].ok += rec.correct; byBlock[meta.block].total += rec.seen;
-        if (byDomain[meta.domain]) { byDomain[meta.domain].ok += rec.correct; byDomain[meta.domain].total += rec.seen; }
-        if (rec.box >= C.SRS.MASTERED_BOX) { mastered++; byBlock[meta.block].mastered++; }
+        if (dom) { dom.ok += rec.correct; dom.total += rec.seen; }
+        if (C.SRS.isMastered(rec)) { mastered++; byBlock[meta.block].mastered++; if (dom) dom.mastered++; }
       }
+      for (const v of [...Object.values(byBlock), ...Object.values(byDomain)]) v.stars = C.Mastery.stars(v);
       return { byBlock, byDomain, mastered, totalItems: Object.keys(index).length };
     },
+
+    /* Patrones de error activos, los peores primero. */
+    recurringErrors() { return C.Errors.ranked(Store.state.errors, Util.today()); },
 
     weakestDomain(byDomain) {
       let worst = null;
@@ -188,18 +241,10 @@
       return worst;
     },
 
-    sessionPct(ses) {
-      let ok = 0, tot = 0;
-      Object.values(ses.score).forEach((r) => { ok += r.ok; tot += r.total; });
-      return Util.pct(ok, tot);
-    },
+    sessionPct(ses) { return C.Level.sessionPct(ses); },
 
-    /* Sugiere subir a C1 si las últimas 5 sesiones completas en B2 superan el 85 %. */
-    readyForC1() {
-      if (Store.state.settings.level !== "b2") return false;
-      const last = Store.state.sessions.filter((s) => s.level === "b2").slice(-5);
-      return last.length >= 5 && last.every((s) => (this.sessionPct(s) || 0) >= 85);
-    }
+    /* "up": 5 sesiones B2 ≥ 85 % · "down": 3 sesiones C1 < 60 % · null. */
+    levelAdvice() { return C.Level.advice(Store.state.sessions, Store.state.settings.level); }
   };
 
   /* ---------------------------------------------------------------- Speech */
@@ -391,26 +436,33 @@
     s: null,
     timerId: null,
 
+    /* mode: "full" (sesión diaria) · "drill" (un bloque) · "errors" (repaso de patrones activos). */
     start(mode, onlyBlock) {
       Speech.stop();
       const level = Store.state.settings.level;
       const mix = D.SESSION_MIX[level];
-      const blocks = mode === "full" ? BLOCK_ORDER.slice() : [onlyBlock];
-      const queue = {};
-      for (const k of blocks) {
-        let entries = [];
-        for (const [pool, n] of Object.entries(mix[k])) {
-          const count = mode === "full" ? n : Math.ceil(n * 1.5);
-          entries.push(...SRS.pick(pool, count, level).map((it) => ({ pool, kind: POOL_KIND[pool], it })));
+      const weak = SRS.weakKeys();
+      let queue = {};
+      if (mode === "errors") queue = this.errorQueue(weak);
+      else {
+        const blocks = mode === "full" ? BLOCK_ORDER.slice() : [onlyBlock];
+        for (const k of blocks) {
+          let entries = [];
+          for (const [pool, n] of Object.entries(mix[k])) {
+            const count = mode === "full" ? n : Math.ceil(n * 1.5);
+            entries.push(...SRS.pick(pool, count, level, false, weak).map((it) => ({ pool, kind: POOL_KIND[pool], it })));
+          }
+          if (k === "vocab") {
+            entries.push(...SRS.pick("custom", CUSTOM_PER_SESSION, level, true).map((it) => ({ pool: "custom", kind: "card", it })));
+          }
+          queue[k] = k === "listening" || k === "challenges" ? entries : Util.shuffle(entries);
         }
-        if (k === "vocab") {
-          entries.push(...SRS.pick("custom", CUSTOM_PER_SESSION, level, true).map((it) => ({ pool: "custom", kind: "card", it })));
-        }
-        queue[k] = k === "listening" || k === "challenges" ? entries : Util.shuffle(entries);
       }
-      const usable = blocks.filter((k) => queue[k].length);
+      const usable = Object.keys(queue).filter((k) => queue[k].length);
+      if (!usable.length) { App.go("home"); return; }
       this.s = {
         mode, level, blocks: usable, queue,
+        statusBefore: C.Errors.statuses(Store.state.errors, Util.today()),
         blockIdx: 0, itemIdx: 0,
         results: Object.fromEntries(usable.map((k) => [k, { ok: 0, total: 0 }])),
         misses: [],
@@ -425,6 +477,25 @@
       App.view = "session";
       Views.render();
     },
+
+    /* Repaso de errores: ítems de los patrones activos en los bloques rápidos
+     * (vocabulario y gramática), ordenados por el calendario SM-2. */
+    errorQueue(weak = SRS.weakKeys()) {
+      const queue = {};
+      if (!weak.size) return queue;
+      for (const k of ERROR_BLOCKS) {
+        const entries = [];
+        for (const pool of Object.keys(D.POOL_BLOCK)) {
+          if (D.POOL_BLOCK[pool] !== k) continue;
+          for (const it of Content.pool(pool)) if (weak.has(Content.patternOf(pool, it).key)) entries.push({ pool, kind: POOL_KIND[pool], it });
+        }
+        const byId = new Map(entries.map((e) => [e.it.id, e]));
+        const picked = SRS.pickFrom(entries.map((e) => e.it), ERRORS_PER_BLOCK);
+        queue[k] = Util.shuffle(picked.map((it) => byId.get(it.id)));
+      }
+      return queue;
+    },
+    errorQueueSize() { return Object.values(this.errorQueue()).reduce((n, es) => n + es.length, 0); },
 
     /* ---- Persistencia de la sesión en curso (sobrevive a una recarga) ----
      * Se guarda en sessionStorage referenciando los ítems por pool + id. */
@@ -534,10 +605,11 @@
       if (s.phase !== "item" || s.answered || !OPTION_KINDS.includes(this.kind)) return;
       const choice = s.current.options[optIdx];
       if (choice === undefined) return;
-      const ok = choice === this.correctOption();
+      const correct = this.correctOption();
+      const ok = choice === correct;
       s.current.selected = optIdx;
       s.answered = true;
-      this.score(ok);
+      this.score(ok, ok ? 4 : 1, { given: choice, expected: correct });
       if (ok) {
         const it = this.item;
         Speech.say(this.kind === "gap" ? it.sentence.replace("___", it.answer) : choice, { auto: true });
@@ -545,12 +617,13 @@
       Views.render();
     },
 
-    score(ok) {
+    /* ok: cuenta para la puntuación de la sesión · q: calidad SM-2 (0–5). */
+    score(ok, q = ok ? 4 : 1, example = null) {
       const s = this.s, k = this.blockKey;
       s.results[k].total += 1;
       if (ok) s.results[k].ok += 1;
       else s.misses.push(this.entry);
-      SRS.record(this.item.id, ok);
+      SRS.record(this.entry, q, example);
     },
 
     /* Listening: cada pregunta puntúa; el audio cuenta como acertado con ≥ 2/3. */
@@ -565,7 +638,9 @@
         s.answered = true;
         Speech.stop();
         if (okCount < it.questions.length) s.misses.push(this.entry);
-        SRS.record(it.id, okCount >= Math.ceil((it.questions.length * 2) / 3));
+        // Todo bien → 4 · al menos 2/3 → 3 (con dudas) · menos → fallo.
+        const q = okCount === it.questions.length ? 4 : okCount >= Math.ceil((it.questions.length * 2) / 3) ? 3 : 1;
+        SRS.record(this.entry, q, q < 3 ? { given: `${okCount} de ${it.questions.length} preguntas`, expected: `Audio «${it.title}»` } : null);
       }
       Views.render();
     },
@@ -594,10 +669,12 @@
       Speech.say(this.item.en, { auto: true });
       Views.render();
     },
-    gradeCard(ok) {
+    /* Autoevaluación: 1 "No lo sabía" · 3 "Con dudas" · 5 "Lo sabía". */
+    gradeCard(q) {
       if (this.kind !== "card" || !this.s.current.revealed || this.s.answered) return;
       this.s.answered = true;
-      this.score(ok);
+      this.s.current.grade = q;
+      this.score(q >= 3, q, { given: this.s.current.attempt.trim() || "(en blanco)", expected: this.item.en });
       Views.render();
     },
 
@@ -621,7 +698,8 @@
       const score = hits * 0.5 + checks * 0.5;
       c.finalScore = Math.round(score * 100);
       this.s.answered = true;
-      this.score(score >= 0.6);
+      const q = score >= 0.85 ? 5 : score >= 0.7 ? 4 : score >= 0.6 ? 3 : score >= 0.3 ? 2 : 1;
+      this.score(score >= 0.6, q, q < 3 ? { given: `${c.finalScore} % del reto`, expected: D.SCENARIOS[it.scenario] || it.brief } : null);
       Views.render();
     },
 
@@ -713,6 +791,12 @@
       }
       return html;
     },
+    /* Dominio en estrellas (0–5); null = aún sin datos suficientes. */
+    stars(n) {
+      if (n === null || n === undefined) return `<span class="text-[11px] text-zinc-600" title="Se calcula a partir de ${C.Mastery.MIN_ANSWERS} respuestas">sin datos</span>`;
+      return `<span class="tracking-tight text-amber-400" role="img" aria-label="${n} de 5 estrellas" title="${n}/5 · precisión y contenido dominado">${"★".repeat(n)}<span class="text-zinc-700">${"★".repeat(5 - n)}</span></span>`;
+    },
+    statusBadge(status) { const st = ERROR_STATUS[status]; return st ? this.badge(st.label, st.cls) : ""; },
     levelBadge(it, pool) {
       const lv = Content.levelOf(it, pool);
       return this.badge(lv.toUpperCase(), lv === "c1" ? "bg-zinc-100 text-zinc-900" : "bg-zinc-800 text-zinc-400");
@@ -737,8 +821,8 @@
         return `<div class="space-y-2">
           <div class="flex items-baseline justify-between gap-3">
             <div class="min-w-0"><span class="font-mono text-xs ${a.text}">B${m.n}</span> <span class="text-sm text-zinc-200">${m.title}</span></div>
-            <div class="text-right shrink-0"><span class="text-sm font-semibold tabular-nums text-zinc-100">${p === null ? "—" : p + "%"}</span>
-            <span class="text-xs text-zinc-500 ml-2 tabular-nums">${b.mastered}/${b.size}</span></div>
+            <div class="text-right shrink-0 flex items-baseline gap-2">${this.stars(b.stars)}<span class="text-sm font-semibold tabular-nums text-zinc-100">${p === null ? "—" : p + "%"}</span>
+            <span class="text-xs text-zinc-500 tabular-nums">${b.mastered}/${b.size}</span></div>
           </div>${this.bar(p, a.bg)}</div>`;
       }).join("");
 
@@ -747,8 +831,33 @@
         const tone = p === null ? "text-zinc-500" : p >= 80 ? "text-emerald-400" : p >= 60 ? "text-amber-400" : "text-rose-400";
         return `<div class="rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-2.5">
           <div class="text-[11px] uppercase tracking-wider text-zinc-500 truncate">${d.es}</div>
-          <div class="mt-0.5 text-lg font-semibold tabular-nums ${tone}">${p === null ? "—" : p + "%"}</div></div>`;
+          <div class="mt-0.5 flex items-baseline justify-between gap-2"><span class="text-lg font-semibold tabular-nums ${tone}">${p === null ? "—" : p + "%"}</span>
+          <span class="text-xs">${v.stars === null ? "" : this.stars(v.stars)}</span></div></div>`;
       }).join("");
+
+      const recurring = Stats.recurringErrors();
+      const errorDrillSize = recurring.length ? Session.errorQueueSize() : 0;
+      const errorRows = recurring.slice(0, 5).map(({ p, status, active }) => {
+        const ex = p.examples[0];
+        return `<li class="py-3 border-b border-zinc-800/80 last:border-0">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-sm font-medium text-zinc-100">${Util.esc(p.label)}</span>
+            <span class="flex items-center gap-2">${this.statusBadge(status)}<span class="text-xs text-zinc-500 tabular-nums">${Util.plural(active, "fallo", "fallos")} en ${C.Errors.WINDOW} días</span></span>
+          </div>
+          ${ex && ex.expected ? `<p class="mt-1 text-xs leading-relaxed"><span class="text-rose-300/80 line-through decoration-rose-400/40">${Util.esc(ex.given)}</span> <span class="text-zinc-600">→</span> <span class="text-zinc-300">${Util.esc(ex.expected)}</span></p>` : ""}
+        </li>`;
+      }).join("");
+      const errorsCard = `<div class="rounded-2xl border ${recurring.some((x) => x.status === "critical") ? "border-rose-400/25" : "border-zinc-800"} bg-zinc-900/40 p-6">
+          <div class="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 class="text-sm font-semibold text-zinc-200">Tus errores recurrentes</h2>
+            <span class="text-xs text-zinc-500">2–3 fallos = emergente · 4 o más = crítico</span>
+          </div>
+          ${recurring.length
+            ? `<ul class="mt-2">${errorRows}</ul>
+               ${errorDrillSize ? `<button data-action="drill-errors" class="mt-4 rounded-lg bg-rose-300 px-4 py-2 text-xs font-semibold text-zinc-950 hover:bg-rose-200 transition">Repasar mis errores · ${Util.plural(errorDrillSize, "ítem", "ítems")}</button>
+               <p class="mt-2 text-xs text-zinc-500">Tus sesiones diarias ya dan prioridad a estos patrones. Un patrón queda superado con 3 aciertos seguidos, el último en un día posterior al último fallo.</p>` : ""}`
+            : `<p class="mt-3 text-sm text-zinc-500">Aún no hay patrones. Cuando falles dos veces el mismo tipo de error (un falso amigo, una regla, una función de conversación), aparecerá aquí con tu respuesta y la correcta.</p>`}
+        </div>`;
 
       const spark = recent.map((ses) => {
         const p = Stats.sessionPct(ses) || 0;
@@ -770,14 +879,19 @@
         return `<li class="flex items-start justify-between gap-3 py-2.5 text-sm">
           <div class="min-w-0"><span class="font-medium text-zinc-100">${Util.esc(w.en)}</span> <span class="text-zinc-500">— ${Util.esc(w.es)}</span>
           ${w.example ? `<div class="text-xs text-zinc-500 italic truncate">${Util.esc(w.example)}</div>` : ""}</div>
-          <div class="flex items-center gap-3 shrink-0">${rec && rec.box >= 4 ? `<span class="text-[11px] text-emerald-400">dominada</span>` : ""}
+          <div class="flex items-center gap-3 shrink-0">${C.SRS.isMastered(rec) ? `<span class="text-[11px] text-emerald-400">dominada</span>` : ""}
           <button data-action="del-word" data-id="${w.id}" class="text-zinc-600 hover:text-rose-400 transition" aria-label="Eliminar ${Util.esc(w.en)}">✕</button></div></li>`;
       }).join("")}</ul>` : `<p class="mt-4 text-sm text-zinc-500">Aún no has añadido palabras. Cuando oigas en una reunión algo que no conoces, apúntalo aquí (también desde el móvil) y entrará en tus repasos.</p>`;
 
-      const c1Hint = Stats.readyForC1()
+      const advice = Stats.levelAdvice();
+      const c1Hint = advice === "up"
         ? `<div class="rounded-xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100 flex flex-wrap items-center justify-between gap-3">
             <span>Llevas 5 sesiones seguidas por encima del 85 % en B2. Estás listo para subir el nivel.</span>
             <button data-action="level" data-level="c1" class="rounded-lg bg-emerald-400 px-3 py-1.5 text-xs font-semibold text-zinc-950">Pasar a C1</button></div>`
+        : advice === "down"
+        ? `<div class="rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100 flex flex-wrap items-center justify-between gap-3">
+            <span>Tus 3 últimas sesiones en C1 están por debajo del 60 %. Consolida unos días en B2: no es un paso atrás, es la zona en la que más se aprende (alrededor del 70–85 % de aciertos).</span>
+            <button data-action="level" data-level="b2" class="rounded-lg bg-amber-400 px-3 py-1.5 text-xs font-semibold text-zinc-950">Volver a B2</button></div>`
         : "";
 
       const recoveredBanner = Store.recoveredKey
@@ -835,6 +949,8 @@
 
         ${c1Hint}
 
+        ${errorsCard}
+
         <div class="grid gap-6 lg:grid-cols-5">
           <div class="lg:col-span-3 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6 space-y-5">
             <div class="flex items-baseline justify-between">
@@ -850,7 +966,7 @@
             </div>
             <div class="flex items-baseline gap-2"><span class="text-4xl font-semibold tabular-nums text-zinc-50">${ag.mastered}</span><span class="text-sm text-zinc-500">/ ${ag.totalItems} ítems</span></div>
             ${this.bar(Util.pct(ag.mastered, ag.totalItems), "bg-zinc-300")}
-            <p class="text-xs text-zinc-500 leading-relaxed">Un ítem está dominado cuando lo aciertas en 3 repasos espaciados seguidos.</p>
+            <p class="text-xs text-zinc-500 leading-relaxed">Un ítem está dominado cuando lo aciertas en 3 repasos espaciados seguidos. Cada acierto aleja el siguiente repaso (1, 6, 15, 38 días…). Un fallo lo devuelve al principio.</p>
             ${recent.length ? `<div><div class="text-[11px] uppercase tracking-wider text-zinc-500 mb-2">Últimas sesiones</div><div class="flex items-end gap-1">${spark}</div></div>` : ""}
           </div>
         </div>
@@ -939,6 +1055,10 @@
     blockIntro(k) {
       const m = D.BLOCK_META[k], a = accentOf(k), n = Session.blockLength;
       const unit = { vocab: "ítems", grammar: "frases", listening: n === 1 ? "audio" : "audios", challenges: n === 1 ? "reto" : "retos" }[k];
+      const errMode = Session.s.mode === "errors";
+      const errLabels = errMode
+        ? [...new Set(Session.s.queue[k].map((e) => Content.patternOf(e.pool, e.it).label))].join(", ")
+        : "";
       const how = {
         vocab: "Frases para conversar y para intervenir en reuniones, vocabulario amplio (phrasal verbs, expresiones, colocaciones), HR Analytics y, si toca, palabras de tu banco personal. Ojo: todas las opciones pueden ser gramaticales. Elige la que diría un nativo en esa situación.",
         grammar: "Completa cada frase con la estructura correcta. Son frases de tu trabajo y la regla aparece en una línea. También salen las trampas típicas del español.",
@@ -951,10 +1071,12 @@
       }[k];
       return `
         <div class="rounded-2xl border ${a.border} ${a.soft} p-6 sm:p-8">
-          <div class="font-mono text-xs ${a.text}">BLOQUE ${m.n} DE 4 · ${n} ${unit} · NIVEL ${Session.s.level.toUpperCase()}</div>
+          <div class="font-mono text-xs ${a.text}">${errMode ? "REPASO DE ERRORES" : `BLOQUE ${m.n} DE 4`} · ${n} ${unit} · NIVEL ${Session.s.level.toUpperCase()}</div>
           <h2 class="mt-2 text-2xl font-semibold tracking-tight text-zinc-50">${m.title}</h2>
           <p class="mt-1 text-sm text-zinc-400">${m.subtitle}</p>
-          <p class="mt-5 text-sm leading-relaxed text-zinc-300">${how}</p>
+          <p class="mt-5 text-sm leading-relaxed text-zinc-300">${errMode
+            ? `Solo ítems de tus patrones de error activos: ${Util.esc(errLabels)}. Fíjate en por qué fallaste antes. El patrón queda superado con 3 aciertos seguidos, el último en un día posterior al último fallo (hoy entrenas, otro día lo confirmas).`
+            : how}</p>
           <p class="mt-3 text-xs text-zinc-500">Tienes 5 minutos de referencia. Si se acaba el tiempo no se corta el bloque, pero lo verás en el reloj.</p>
         </div>
         ${this.footer(`Empezar bloque ${m.n}`, true)}`;
@@ -1159,10 +1281,12 @@
           <p class="text-2xl font-semibold text-amber-200">${Util.esc(it.en)}</p>
           ${it.example ? `<p class="text-sm text-zinc-300 italic">“${Util.esc(it.example)}”</p>` : ""}
           <div class="flex gap-4">${this.speakBtn(it.en)}${it.example ? this.speakBtn(it.example, "Ejemplo") : ""}</div>
-          ${S.s.answered ? "" : `<div class="grid grid-cols-2 gap-3 pt-2">
-            <button data-action="grade" data-ok="0" class="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm font-medium text-rose-200 hover:bg-rose-500/20 transition">No lo sabía</button>
-            <button data-action="grade" data-ok="1" class="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-200 hover:bg-emerald-500/20 transition">Lo sabía</button>
-          </div>`}
+          ${S.s.answered ? "" : `<div class="grid grid-cols-3 gap-2 sm:gap-3 pt-2">
+            <button data-action="grade" data-q="1" class="rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-3 text-sm font-medium text-rose-200 hover:bg-rose-500/20 transition"><kbd class="hidden sm:inline font-mono text-[10px] text-rose-300/60 mr-1">1</kbd>No lo sabía</button>
+            <button data-action="grade" data-q="3" class="rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-3 text-sm font-medium text-amber-200 hover:bg-amber-400/20 transition"><kbd class="hidden sm:inline font-mono text-[10px] text-amber-300/60 mr-1">2</kbd>Con dudas</button>
+            <button data-action="grade" data-q="5" class="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-3 text-sm font-medium text-emerald-200 hover:bg-emerald-500/20 transition"><kbd class="hidden sm:inline font-mono text-[10px] text-emerald-300/60 mr-1">3</kbd>Lo sabía</button>
+          </div>
+          <p class="text-xs text-zinc-500">«Con dudas» cuenta como acierto, pero el repaso vuelve antes.</p>`}
         </div>`}
         ${footer}`;
     },
@@ -1406,15 +1530,34 @@
         return `<li class="flex gap-3 py-3 border-b border-zinc-900 last:border-0 text-sm leading-relaxed"><span class="mt-1.5 w-1.5 h-1.5 rounded-full ${a.bg} shrink-0"></span><div>${missLine(e)}</div></li>`;
       }).join("") : `<li class="py-3 text-sm text-zinc-400">Sin fallos. Impecable.</li>`;
 
+      // Avances y foco (patrones de error antes y después de la sesión).
+      const today = Util.today(), errs = Store.state.errors;
+      const change = C.Errors.diff(s.statusBefore || {}, C.Errors.statuses(errs, today));
+      const focus = C.Errors.ranked(errs, today).slice(0, 3);
+      const labelOf = (k) => Util.esc((errs[k] && errs[k].label) || k);
+      const patternCard = change.resolved.length || change.worse.length || focus.length
+        ? `<div class="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6 space-y-4">
+            ${change.resolved.length ? `<div><h2 class="text-sm font-semibold text-emerald-300">Avances</h2>
+              <ul class="mt-2 space-y-1.5 text-sm text-zinc-200">${change.resolved.map((k) => `<li>✓ Has superado <strong>${labelOf(k)}</strong>: lo has acertado en días distintos sin volver a fallar.</li>`).join("")}</ul></div>` : ""}
+            ${change.worse.length ? `<div><h2 class="text-sm font-semibold text-amber-300">Patrones a vigilar</h2>
+              <ul class="mt-2 space-y-1.5 text-sm text-zinc-300">${change.worse.map((k) => `<li class="flex flex-wrap items-center gap-2">${labelOf(k)} ${this.statusBadge(C.Errors.status(errs[k], today))}</li>`).join("")}</ul></div>` : ""}
+            ${focus.length ? `<div><h2 class="text-sm font-semibold text-zinc-200">Foco para tu próxima sesión</h2>
+              <p class="mt-1 text-xs text-zinc-500">La app los prioriza automáticamente en tu próxima sesión.</p>
+              <ol class="mt-2 space-y-1.5 text-sm text-zinc-300 list-decimal list-inside">${focus.map((f) => `<li>${Util.esc(f.p.label)} <span class="text-xs text-zinc-500">· ${Util.plural(f.active, "fallo", "fallos")}</span></li>`).join("")}</ol></div>` : ""}
+          </div>`
+        : "";
+      const modeLabel = { full: "Sesión completada", drill: "Refuerzo completado", errors: "Repaso de errores completado" }[s.mode] || "Completado";
+
       return `
       <section class="max-w-2xl mx-auto space-y-6 fade-in pt-4">
         <div class="rounded-2xl border border-zinc-800 bg-gradient-to-br from-zinc-900 to-zinc-950 p-8 text-center">
-          <p class="font-mono text-xs uppercase tracking-[0.2em] text-zinc-500">${s.mode === "full" ? "Sesión completada" : "Refuerzo completado"} · ${minutes} min · ${s.level.toUpperCase()}</p>
+          <p class="font-mono text-xs uppercase tracking-[0.2em] text-zinc-500">${modeLabel} · ${minutes} min · ${s.level.toUpperCase()}</p>
           <div class="mt-4 text-6xl font-semibold tabular-nums text-zinc-50">${p}%</div>
           <p class="mt-2 text-sm text-zinc-400">${verdict}</p>
           ${s.mode === "full" ? `<div class="mt-5 inline-flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-400/10 px-4 py-1.5 text-sm text-amber-200">Racha: <strong class="tabular-nums">${st.current}</strong> ${st.current === 1 ? "día" : "días"}</div>` : ""}
         </div>
         <div class="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6 space-y-4">${rows}</div>
+        ${patternCard}
         <div class="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6">
           <h2 class="text-sm font-semibold text-zinc-200 mb-1">Para repasar</h2>
           <p class="text-xs text-zinc-500 mb-2">Volverán a aparecer en tus próximas sesiones.</p>
@@ -1498,7 +1641,8 @@
           case "play": Session.playListening(); break;
           case "rate": Session.setRate(Number(el.dataset.rate)); break;
           case "reveal": Session.revealCard(); break;
-          case "grade": Session.gradeCard(el.dataset.ok === "1"); break;
+          case "grade": Session.gradeCard(Number(el.dataset.q)); break;
+          case "drill-errors": Session.start("errors"); break;
           case "next": Session.next(); break;
           case "evaluate": Session.evaluateChallenge(); break;
           case "finish-challenge": Session.finishChallenge(); break;
@@ -1577,6 +1721,7 @@
         if (e.target.id === "card-attempt" && e.key === "Enter") { e.preventDefault(); Session.revealCard(); return; }
         if (typing) return;
         if (/^[1-4]$/.test(e.key) && OPTION_KINDS.includes(Session.kind)) { Session.choose(Number(e.key) - 1); return; }
+        if (/^[1-3]$/.test(e.key) && Session.kind === "card" && Session.s.current.revealed && !Session.s.answered) { Session.gradeCard([1, 3, 5][Number(e.key) - 1]); return; }
         if (e.key === "Enter") {
           const btn = document.getElementById("primary-btn");
           if (btn && !btn.disabled) { e.preventDefault(); btn.click(); }
