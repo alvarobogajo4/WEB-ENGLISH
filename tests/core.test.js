@@ -1,7 +1,7 @@
 /* Tests del núcleo puro. Ejecutar: npm test  (o: node --test tests/) */
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { Util, SRS, Errors, Mastery, Level, Streak, State, Bank, countHedges } = require("../js/core.js");
+const { Util, SRS, Errors, Mastery, Level, Streak, State, Bank, Nivel, countHedges } = require("../js/core.js");
 
 /* Registro SM-2 abreviado para los tests. */
 const R = (o = {}) => ({ ...SRS.blank(), seen: 1, correct: 1, ...o });
@@ -305,7 +305,7 @@ test("normalize descarta piezas dañadas sin perder las buenas", () => {
   assert.deepEqual(s.streak, { current: 4, best: 6, lastDate: "2026-11-10" });
   assert.equal(s.settings.level, "c1");
   assert.equal(s.settings.tts, true); // valor por defecto conservado
-  assert.equal(s.version, 3);
+  assert.equal(s.version, 4);
 });
 
 test("normalize migra el progreso de la versión 2 (cajas Leitner) sin perderlo", () => {
@@ -361,6 +361,89 @@ test("banco: merge añade solo lo nuevo, sin duplicar ids ni mayúsculas", () =>
   assert.deepEqual(r.custom.map((w) => w.en), ["Arvo", "fair enough", "to be fair"]);
   assert.equal(new Set(r.custom.map((w) => w.id)).size, 3);
   assert.equal(custom.length, 1); // no muta el original
+});
+
+/* ----------------------------------------------------------------- Nivel */
+const chequeo = (fecha, niveles, extra = {}) => ({
+  fecha,
+  modo: "hablado",
+  criterios: Object.fromEntries(Object.keys(Nivel.CRITERIA).map((k, i) => [k, { nivel: Array.isArray(niveles) ? niveles[i] : niveles, evidencia: `cita ${k}` }])),
+  situaciones: { "small-talk": "B2+", "reuniones": "B1+" },
+  fuertes: [{ texto: "Small talk natural", evidencia: "Pretty good, thanks — how about you?" }],
+  debiles: [{ texto: "Discrepar con tacto", evidencia: "I don't agree.", accion: "Practicar 'I see your point, but…'" }],
+  ...extra
+});
+
+test("nivel: escala MCER ↔ Cambridge y redondeo al nivel más cercano", () => {
+  assert.equal(Nivel.toScore("B2+"), 175);
+  assert.equal(Nivel.fromScore(175), "B2+");
+  assert.equal(Nivel.fromScore(170), "B2+"); // empate: sube
+  assert.equal(Nivel.fromScore(162), "B2");
+  assert.equal(Nivel.fromScore(300), "C2");
+});
+
+test("nivel: el global es la mediana de los 6 criterios", () => {
+  const { entry } = Nivel.normalize(chequeo("2026-11-12", ["B2", "B1+", "B1+", "B2", "B2+", "C1"]));
+  assert.deepEqual(entry.global, { nivel: "B2", puntos: 165 }); // 155,155,165,165,175,185 → 165
+});
+
+test("nivel: el foco es el criterio y la situación más débiles (empate → lo más expresivo)", () => {
+  const { entry } = Nivel.normalize(chequeo("2026-11-12", ["B2", "B1+", "B2", "B1+", "B2", "B2"]));
+  assert.deepEqual(entry.foco, { criterio: "interaccion", situacion: "reuniones" }); // corrección e interacción empatan en B1+
+});
+
+test("nivel: un chequeo sin evidencias, sin acciones o con niveles raros no se acepta", () => {
+  const bad = chequeo("2026-11-12", "B2");
+  bad.criterios.fluidez = { nivel: "B7", evidencia: "" };
+  bad.debiles = [{ texto: "x", evidencia: "y" }];
+  bad.situaciones = { marte: "B2" };
+  const { entry, errors } = Nivel.normalize(bad);
+  assert.equal(entry, null);
+  assert.ok(errors.some((e) => /fluidez.*nivel/.test(e)));
+  assert.ok(errors.some((e) => /fluidez.*evidencia/.test(e)));
+  assert.ok(errors.some((e) => /acción/.test(e)));
+  assert.ok(errors.some((e) => /marte/.test(e)));
+});
+
+test("nivel: historial ordenado, sin duplicar fecha, con tendencia y mapa de situaciones", () => {
+  const a = Nivel.tryNormalize(chequeo("2026-11-12", "B2"));
+  const b = Nivel.tryNormalize(chequeo("2026-12-12", "B2+", { situaciones: { "datos": "C1" } }));
+  const b2 = Nivel.tryNormalize(chequeo("2026-12-12", "B2+", { situaciones: { "datos": "B2+" } }));
+  const h = Nivel.merge(Nivel.merge([], [b]), [a, b2]);
+  assert.deepEqual(h.map((e) => e.fecha), ["2026-11-12", "2026-12-12"]);
+  assert.equal(h[1].situaciones.datos, "B2+"); // el de la misma fecha se reemplaza
+  assert.equal(Nivel.trend(h).global, 10);
+  assert.equal(Nivel.trend(h).criterios.fluidez, 10);
+  assert.equal(Nivel.trend([a]), null);
+  const map = Nivel.situationMap(h);
+  assert.deepEqual(map["small-talk"], { nivel: "B2+", fecha: "2026-11-12" }); // del chequeo anterior
+  assert.deepEqual(map.datos, { nivel: "B2+", fecha: "2026-12-12" });
+});
+
+test("nivel: métricas objetivas de las respuestas", () => {
+  const m = Nivel.metrics([
+    "So, the other day I was at the supermarket and, out of the blue, my old boss showed up. It turned out he lives round the corner.",
+    "To be fair, I think maybe it depends. Having said that, um, I'd go for it, you know."
+  ], ["out of the blue", "to be fair", "fair enough"]);
+  assert.equal(m.palabrasPorTurno, Math.round(m.palabras / 2));
+  assert.equal(m.chunksActivos, 2);
+  assert.ok(m.conectores >= 3); // it turned out, to be fair, having said that
+  assert.ok(m.muletillas > 0 && m.atenuadores > 0);
+  assert.ok(m.variedadLexica > 0.5 && m.variedadLexica <= 1);
+  assert.deepEqual(Nivel.metrics([""]), { palabras: 0, palabrasPorTurno: 0, variedadLexica: 0, conectores: 0, chunksActivos: 0, muletillas: 0, atenuadores: 0 });
+});
+
+test("nivel: el archivo de nivel se reconoce, y el estado v4 lo guarda junto al delivery", () => {
+  const file = JSON.stringify(Nivel.toFile([chequeo("2026-11-12", "B2")]));
+  const r = State.parseFile(file);
+  assert.equal(r.kind, "nivel");
+  assert.equal(r.entries[0].global.nivel, "B2");
+  const st = State.normalize({ version: 3, nivel: [chequeo("2026-11-12", "B2"), { basura: 1 }], delivery: [{ date: "2026-11-12", wpm: 120, secs: 60, words: 120 }, { date: "x" }] });
+  assert.equal(st.version, 4);
+  assert.equal(st.nivel.length, 1);
+  assert.equal(st.delivery.length, 1);
+  assert.equal(st.delivery[0].social, false);
+  assert.deepEqual(State.normalize({ items: {} }).nivel, []);
 });
 
 /* ---------------------------------------------------------------- Hedges */

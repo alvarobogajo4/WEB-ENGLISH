@@ -8,6 +8,7 @@
  *   Mastery    → dominio en estrellas (0–5) por destreza o ámbito
  *   Level      → dificultad adaptativa (subir a C1 / consolidar en B2)
  *   Bank       → archivos de vocabulario para añadir al banco (puente con /fluidez-activa)
+ *   Nivel      → nivel de expresión (MCER con niveles plus, escala Cambridge) y sus métricas
  *   Streak     → racha diaria
  *   State      → estado inicial, normalización y validación de importaciones
  *   Hedges     → detección de muletillas que restan autoridad
@@ -309,15 +310,17 @@
   const str = (v, max = 300) => (typeof v === "string" ? v.slice(0, max) : "");
 
   const State = {
-    VERSION: 3,
+    VERSION: 4,
     fresh() {
       return {
-        version: 3,
+        version: 4,
         streak: { current: 0, best: 0, lastDate: null },
         items: {},       // id → registro SM-2 (ver SRS)
         errors: {},      // patrón → registro de errores (ver Errors)
         sessions: [],    // { date, ts, level, score: { block: { ok, total } } }
         custom: [],      // banco personal: { id, en, es, example, created }
+        nivel: [],       // chequeos de expresión (ver Nivel), del más antiguo al más reciente
+        delivery: [],    // métricas de los retos hablados: { date, secs, words, wpm, fillers, authority, social }
         settings: { tts: true, voice: "en-GB", level: "b2", lastExport: null }
       };
     },
@@ -336,6 +339,12 @@
         lapses: nonNeg(r.lapses),
         lastSeen: isDate(r.lastSeen) ? r.lastSeen : null
       };
+    },
+
+    MAX_DELIVERY: 60,
+    normalizeDelivery(d) {
+      if (!isDate(d.date)) return null;
+      return { date: d.date, secs: nonNeg(d.secs), words: nonNeg(d.words), wpm: nonNeg(d.wpm), fillers: nonNeg(d.fillers), authority: nonNeg(d.authority), social: !!d.social };
     },
 
     normalizeError(p) {
@@ -369,8 +378,10 @@
       const st = isObj(parsed.streak) ? parsed.streak : {};
       return {
         ...base,
-        version: 3,
+        version: 4,
         errors,
+        nivel: Array.isArray(parsed.nivel) ? Nivel.merge([], parsed.nivel.map(Nivel.tryNormalize).filter(Boolean)) : [],
+        delivery: Array.isArray(parsed.delivery) ? parsed.delivery.filter(isObj).map(State.normalizeDelivery).filter(Boolean).slice(-State.MAX_DELIVERY) : [],
         streak: {
           current: Math.max(0, Number(st.current) || 0),
           best: Math.max(0, Number(st.best) || 0),
@@ -403,11 +414,13 @@
 
     /* Lee cualquier archivo de la app y dice qué es:
      *   { kind: "bank", words }  → palabras para AÑADIR al banco (p. ej. desde /fluidez-activa)
+     *   { kind: "nivel", entries } → chequeos de nivel para AÑADIR al historial (/chequeo-nivel)
      *   { kind: "state", state } → copia de seguridad completa (REEMPLAZA el progreso) */
     parseFile(text) {
       let data;
       try { data = JSON.parse(text); } catch (_) { throw new Error("El archivo no es un JSON válido."); }
       if (isObj(data) && data.app === "english-20-minutes" && data.kind === Bank.KIND) return { kind: "bank", words: Bank.parse(data) };
+      if (isObj(data) && data.app === "english-20-minutes" && data.kind === Nivel.KIND) return { kind: "nivel", entries: Nivel.parse(data) };
       return { kind: "state", state: State.fromImport(text) };
     },
 
@@ -458,6 +471,187 @@
     }
   };
 
+  /* ----------------------------------------------------------------- Nivel */
+  /* Nivel de EXPRESIÓN (no de examen). Escala MCER con niveles plus (volumen
+   * complementario 2020), situada en la Cambridge English Scale para tener una
+   * referencia conocida. Se evalúan 6 criterios (aspectos cualitativos del MCER
+   * + adaptación de registro) y un mapa de situaciones. Lo usan:
+   *   - /chequeo-nivel (Claude Code) → scripts/nivel.js → archivo kind "nivel"
+   *   - la app (tarjeta «Tu nivel de expresión»), que importa ese archivo.
+   * Chequeo normalizado:
+   *   { fecha, modo, global: { nivel, puntos }, criterios: { rango: { nivel, evidencia }, … },
+   *     situaciones: { clave: nivel }, fuertes: [{ texto, evidencia }],
+   *     debiles: [{ texto, evidencia, accion }], foco: { criterio, situacion },
+   *     metricas: { … }, variantes: [ … ] } */
+  const Nivel = {
+    KIND: "nivel",
+    MAX_HISTORY: 36,
+    LEVELS: ["A2", "A2+", "B1", "B1+", "B2", "B2+", "C1", "C1+", "C2"],
+    SCORE: { "A2": 125, "A2+": 135, "B1": 145, "B1+": 155, "B2": 165, "B2+": 175, "C1": 185, "C1+": 195, "C2": 205 },
+    GOAL: "B2+",
+    CRITERIA: {
+      rango:       "Rango",
+      correccion:  "Corrección",
+      fluidez:     "Fluidez",
+      interaccion: "Interacción",
+      coherencia:  "Coherencia",
+      adaptacion:  "Adaptación"
+    },
+    /* Si hay empate entre los más débiles, manda lo más ligado a expresarse. */
+    FOCUS_ORDER: ["interaccion", "fluidez", "adaptacion", "rango", "coherencia", "correccion"],
+    SITUATIONS: {
+      "mark-1a1":   "1:1 con Mark",
+      "reuniones":  "Reuniones: intervenir y discrepar",
+      "presentar":  "Presentar",
+      "datos":      "Explicar datos a no expertos",
+      "small-talk": "Small talk con compañeros",
+      "social":     "Conversación social",
+      "historias":  "Contar historias",
+      "opiniones":  "Opinar de actualidad",
+      "problemas":  "Resolver problemas (quejas, servicios)",
+      "escrito":    "Mensajes de Teams y correos"
+    },
+    CONNECTORS: ["however", "although", "even though", "on the other hand", "whereas", "because", "since", "that's why", "as a result",
+      "which means", "in the end", "first of all", "to begin with", "after that", "meanwhile", "anyway", "besides", "what's more",
+      "on top of that", "for example", "for instance", "in other words", "to be fair", "having said that", "that said", "by the way",
+      "as far as i'm concerned", "unless", "otherwise", "instead", "overall", "to sum up", "so that", "in fact", "it turned out"],
+
+    toScore(level) { return Nivel.SCORE[level] ?? null; },
+    /* Nivel más cercano a una puntuación (los empates suben: 170 → B2+). */
+    fromScore(n) {
+      let best = Nivel.LEVELS[0];
+      for (const l of Nivel.LEVELS) if (Math.abs(Nivel.SCORE[l] - n) <= Math.abs(Nivel.SCORE[best] - n)) best = l;
+      return best;
+    },
+    median(nums) {
+      const a = nums.slice().sort((x, y) => x - y), m = a.length >> 1;
+      return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+    },
+    global(criterios) {
+      const pts = Object.keys(Nivel.CRITERIA).map((k) => Nivel.toScore(criterios[k].nivel));
+      const puntos = Math.round(Nivel.median(pts));
+      return { nivel: Nivel.fromScore(puntos), puntos };
+    },
+    /* Criterio y situación más débiles del chequeo: lo que se entrena hasta el siguiente. */
+    focus(entry) {
+      const crit = Nivel.FOCUS_ORDER.slice().sort((a, b) => Nivel.toScore(entry.criterios[a].nivel) - Nivel.toScore(entry.criterios[b].nivel) || Nivel.FOCUS_ORDER.indexOf(a) - Nivel.FOCUS_ORDER.indexOf(b))[0];
+      const sits = Object.entries(entry.situaciones).sort((a, b) => Nivel.toScore(a[1]) - Nivel.toScore(b[1]));
+      return { criterio: crit, situacion: sits.length ? sits[0][0] : null };
+    },
+
+    /* Normaliza un chequeo. Devuelve { entry, errors }; entry es null si hay errores. */
+    normalize(raw) {
+      const errors = [];
+      if (!isObj(raw)) return { entry: null, errors: ["el chequeo no es un objeto"] };
+      const lvl = (v) => (typeof v === "string" && Nivel.SCORE[v.trim().toUpperCase()] ? v.trim().toUpperCase() : null);
+      if (!isDate(raw.fecha)) errors.push("fecha no válida (AAAA-MM-DD)");
+      const criterios = {};
+      for (const k of Object.keys(Nivel.CRITERIA)) {
+        const c = isObj(raw.criterios) ? raw.criterios[k] : null;
+        const nivel = c && lvl(c.nivel);
+        const evidencia = c ? str(c.evidencia, 400).trim() : "";
+        if (!nivel) errors.push(`criterio "${k}": falta un nivel válido (${Nivel.LEVELS.join(", ")})`);
+        if (!evidencia) errors.push(`criterio "${k}": falta la evidencia (una cita de tus respuestas)`);
+        criterios[k] = { nivel, evidencia };
+      }
+      const situaciones = {};
+      if (isObj(raw.situaciones)) {
+        for (const [k, v] of Object.entries(raw.situaciones)) {
+          if (!Nivel.SITUATIONS[k]) errors.push(`situación desconocida "${k}"`);
+          else if (!lvl(v)) errors.push(`situación "${k}": nivel no válido`);
+          else situaciones[k] = lvl(v);
+        }
+      }
+      if (!Object.keys(situaciones).length) errors.push("faltan situaciones evaluadas");
+      const list = (v, withAction) => (Array.isArray(v) ? v : []).filter(isObj).slice(0, 3)
+        .map((x) => ({ texto: str(x.texto, 300).trim(), evidencia: str(x.evidencia, 400).trim(), ...(withAction ? { accion: str(x.accion, 300).trim() } : {}) }))
+        .filter((x) => x.texto);
+      const fuertes = list(raw.fuertes, false), debiles = list(raw.debiles, true);
+      if (!fuertes.length) errors.push("falta al menos un punto fuerte");
+      if (!debiles.length) errors.push("falta al menos un punto débil");
+      if (debiles.some((d) => !d.accion)) errors.push("cada punto débil necesita una acción concreta");
+      if (errors.length) return { entry: null, errors };
+      const metricas = {};
+      if (isObj(raw.metricas)) for (const [k, v] of Object.entries(raw.metricas)) if (Number.isFinite(Number(v))) metricas[k] = Math.round(Number(v) * 100) / 100;
+      const entry = {
+        fecha: raw.fecha,
+        modo: ["hablado", "escrito", "mixto"].includes(raw.modo) ? raw.modo : "mixto",
+        global: Nivel.global(criterios),
+        criterios, situaciones, fuertes, debiles,
+        metricas,
+        variantes: Array.isArray(raw.variantes) ? raw.variantes.map((v) => str(v, 60)).filter(Boolean).slice(0, 12) : []
+      };
+      entry.foco = Nivel.focus(entry);
+      return { entry, errors: [] };
+    },
+    tryNormalize(raw) { return Nivel.normalize(raw).entry; },
+
+    /* Añade chequeos al historial (el de la misma fecha se reemplaza), ordenado por fecha. */
+    merge(history, entries) {
+      const byDate = new Map(history.map((e) => [e.fecha, e]));
+      for (const e of entries) byDate.set(e.fecha, e);
+      return [...byDate.values()].sort((a, b) => a.fecha.localeCompare(b.fecha)).slice(-Nivel.MAX_HISTORY);
+    },
+
+    toFile(entries, now = new Date()) { return { app: "english-20-minutes", format: 1, kind: Nivel.KIND, exportedAt: now.toISOString(), entries }; },
+    parse(data) {
+      if (!isObj(data) || !Array.isArray(data.entries)) throw new Error("El archivo de nivel no tiene chequeos.");
+      const entries = data.entries.map(Nivel.tryNormalize).filter(Boolean);
+      if (!entries.length) throw new Error("El archivo de nivel no tiene chequeos válidos.");
+      return entries;
+    },
+
+    /* Cambio respecto al chequeo anterior, en puntos de la escala (por criterio y global). */
+    trend(history) {
+      if (history.length < 2) return null;
+      const [prev, last] = history.slice(-2);
+      const out = { global: last.global.puntos - prev.global.puntos, criterios: {} };
+      for (const k of Object.keys(Nivel.CRITERIA)) out.criterios[k] = Nivel.toScore(last.criterios[k].nivel) - Nivel.toScore(prev.criterios[k].nivel);
+      return out;
+    },
+
+    /* Último nivel conocido de cada situación (no todas se evalúan cada mes). */
+    situationMap(history) {
+      const out = {};
+      for (const e of history) for (const [k, v] of Object.entries(e.situaciones)) out[k] = { nivel: v, fecha: e.fecha };
+      return out;
+    },
+
+    /* Métricas objetivas de unas respuestas (texto de cada turno):
+     *   palabrasPorTurno · variedadLexica (MATTR, ventana de 50 palabras: 0–1, más es más variado)
+     *   conectores (distintos) · chunksActivos (de tu progreso de fluidez que aparecen)
+     *   muletillas (relleno) · atenuadores (restan autoridad en el trabajo) — por cada 100 palabras */
+    metrics(texts, chunks = []) {
+      const all = texts.map(String).join(" \n ");
+      const tokens = (all.toLowerCase().match(/[a-z]+(?:'[a-z]+)?/g) || []);
+      const n = tokens.length;
+      const W = 50;
+      let ttr = 0;
+      if (n && n < W) ttr = new Set(tokens).size / n;
+      else if (n) {
+        let sum = 0;
+        for (let i = 0; i + W <= n; i++) sum += new Set(tokens.slice(i, i + W)).size / W;
+        ttr = sum / (n - W + 1);
+      }
+      const low = ` ${all.toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, " ")} `;
+      const has = (p) => new RegExp(`(^|[^a-z'])${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z']|$)`).test(low);
+      const turns = texts.filter((t) => String(t).trim()).length;
+      const hedges = countHedges(all);
+      const per100 = (x) => (n ? Math.round((x / n) * 1000) / 10 : 0);
+      const authority = HEDGES.filter((h) => h.authority).map((h) => h.t);
+      const sum = (pred) => hedges.filter(pred).reduce((a, h) => a + h.n, 0);
+      return {
+        palabras: n,
+        palabrasPorTurno: turns ? Math.round(n / turns) : 0,
+        variedadLexica: Math.round(ttr * 100) / 100,
+        conectores: Nivel.CONNECTORS.filter(has).length,
+        chunksActivos: [...new Set(chunks.map((c) => String(c).toLowerCase().trim()).filter(Boolean))].filter(has).length,
+        muletillas: per100(sum((h) => !authority.includes(h.t))),
+        atenuadores: per100(sum((h) => authority.includes(h.t)))
+      };
+    }
+  };
+
   /* ---------------------------------------------------------------- Hedges */
   /* Muletillas y atenuadores que restan autoridad en un registro profesional.
    * "Sorry" funcional ("Sorry to jump in", "Sorry, could you…") NO cuenta:
@@ -483,7 +677,7 @@
       .filter((h) => h.n);
   }
 
-  const Core = { Util, SRS, Errors, Mastery, Level, Streak, State, Bank, HEDGES, countHedges };
+  const Core = { Util, SRS, Errors, Mastery, Level, Streak, State, Bank, Nivel, HEDGES, countHedges };
   root.E20_CORE = Core;
   if (typeof module !== "undefined" && module.exports) module.exports = Core;
 })(typeof window !== "undefined" ? window : globalThis);
