@@ -231,6 +231,28 @@
     /* Patrones de error activos, los peores primero. */
     recurringErrors() { return C.Errors.ranked(Store.state.errors, Util.today()); },
 
+    /* Indicadores continuos para «Tu nivel de expresión»: lo de después del último
+     * chequeo frente a lo de antes. { now, before } por indicador (null = sin datos). */
+    levelIndicators() {
+      const st = Store.state, last = st.nivel[st.nivel.length - 1], since = last ? last.fecha : null;
+      const avg = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+      const split = (list, dateOf) => since
+        ? { after: list.filter((x) => dateOf(x) > since), before: list.filter((x) => dateOf(x) <= since) }
+        : { after: list, before: [] };
+      const del = split(st.delivery, (d) => d.date);
+      const perMin = (d) => (d.secs ? (d.fillers / d.secs) * 60 : 0);
+      const lis = split(st.sessions.filter((s) => s.score && s.score.listening && s.score.listening.total), (s) => s.date);
+      const lisPct = (arr) => { const ok = arr.reduce((a, s) => a + s.score.listening.ok, 0), t = arr.reduce((a, s) => a + s.score.listening.total, 0); return t ? (ok / t) * 100 : null; };
+      const ranked = this.recurringErrors();
+      return {
+        wpm: { now: avg(del.after.slice(-5).map((d) => d.wpm)), before: avg(del.before.slice(-5).map((d) => d.wpm)) },
+        fillers: { now: avg(del.after.slice(-5).map(perMin)), before: avg(del.before.slice(-5).map(perMin)) },
+        listening: { now: lisPct(lis.after.slice(-5)), before: lisPct(lis.before.slice(-5)) },
+        errors: { active: ranked.length, critical: ranked.filter((r) => r.status === "critical").length },
+        fluidez: st.fluidez
+      };
+    },
+
     weakestDomain(byDomain) {
       let worst = null;
       for (const [k, v] of Object.entries(byDomain)) {
@@ -700,7 +722,28 @@
       this.s.answered = true;
       const q = score >= 0.85 ? 5 : score >= 0.7 ? 4 : score >= 0.6 ? 3 : score >= 0.3 ? 2 : 1;
       this.score(score >= 0.6, q, q < 3 ? { given: `${c.finalScore} % del reto`, expected: D.SCENARIOS[it.scenario] || it.brief } : null);
+      this.logDelivery(c, it);
       Views.render();
+    },
+
+    /* Guarda ritmo y muletillas del reto (indicador continuo de fluidez para «Tu nivel»).
+     * Solo si respondió hablando al menos 5 s: un texto tecleado no dice nada del ritmo. */
+    logDelivery(c, it) {
+      if (!c.voice || c.voice.ms < 5000) return;
+      const social = it.context === "social";
+      const all = C.countHedges(c.text);
+      const authority = new Set(C.HEDGES.filter((h) => h.authority).map((h) => h.t));
+      const st = Store.state;
+      st.delivery = [...st.delivery, {
+        date: Util.today(),
+        secs: Math.round(c.voice.ms / 1000),
+        words: Util.words(c.text),
+        wpm: Math.round(c.voice.words / (c.voice.ms / 60000)),
+        fillers: all.filter((h) => !authority.has(h.t)).reduce((a, h) => a + h.n, 0),
+        authority: all.filter((h) => authority.has(h.t)).reduce((a, h) => a + h.n, 0),
+        social
+      }].slice(-C.State.MAX_DELIVERY);
+      Store.save();
     },
 
     next() {
@@ -802,6 +845,110 @@
       return this.badge(lv.toUpperCase(), lv === "c1" ? "bg-zinc-100 text-zinc-900" : "bg-zinc-800 text-zinc-400");
     },
 
+    /* ---- TU NIVEL DE EXPRESIÓN ---- */
+    levelTone(level) {
+      const p = C.Nivel.toScore(level) || 0;
+      return p >= 175 ? "text-emerald-300" : p >= 165 ? "text-sky-300" : p >= 155 ? "text-amber-300" : "text-rose-300";
+    },
+    /* Flecha de tendencia; higherBetter = false para lo que conviene bajar (muletillas). */
+    trendArrow(now, before, higherBetter = true, unit = "") {
+      if (now === null || before === null || before === undefined) return "";
+      const d = now - before, rel = before ? Math.abs(d) / Math.abs(before) : Math.abs(d);
+      if (rel < 0.05) return `<span class="text-zinc-500">= vs antes</span>`;
+      const good = (d > 0) === higherBetter;
+      return `<span class="${good ? "text-emerald-400" : "text-rose-400"}">${d > 0 ? "↑" : "↓"} ${Math.abs(Math.round(d))}${unit} vs antes</span>`;
+    },
+
+    levelCard() {
+      const N = C.Nivel, st = Store.state, h = st.nivel, today = Util.today();
+      const last = h[h.length - 1];
+      const ind = Stats.levelIndicators();
+      const f = ind.fluidez;
+      const row = (label, value, extra = "") => `<li class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 py-1.5 border-b border-zinc-800/60 last:border-0">
+          <span class="text-zinc-400">${label}</span><span class="text-right"><span class="text-zinc-100 tabular-nums">${value}</span> <span class="text-xs">${extra}</span></span></li>`;
+      const fmt = (v, d = 0) => (v === null || v === undefined ? "—" : (Math.round(v * 10 ** d) / 10 ** d).toString());
+      const indicators = `<div>
+          <h3 class="text-[11px] uppercase tracking-wider text-zinc-500">Indicadores continuos${last ? " desde el chequeo" : ""}</h3>
+          <ul class="mt-1.5 text-sm">
+            ${row("Rango · chunks activos", f ? `${f.activos} <span class="text-zinc-500">+ ${f.enUso} en uso</span>` : "—", f ? "" : `<span class="text-zinc-600">con /fluidez-activa</span>`)}
+            ${row("Rango · usos espontáneos", f ? `${f.espontaneoPct} %` : "—")}
+            ${row("Fluidez · ritmo al hablar", ind.wpm.now === null ? "—" : `${fmt(ind.wpm.now)} wpm`, ind.wpm.now === null ? `<span class="text-zinc-600">responde hablando en los retos</span>` : this.trendArrow(ind.wpm.now, ind.wpm.before, true))}
+            ${row("Fluidez · muletillas por minuto", fmt(ind.fillers.now, 1), this.trendArrow(ind.fillers.now, ind.fillers.before, false))}
+            ${row("Corrección · patrones de error activos", `${ind.errors.active}`, ind.errors.critical ? `<span class="text-rose-300">${Util.plural(ind.errors.critical, "crítico", "críticos")}</span>` : "")}
+            ${row("Interacción (valoración del tutor)", f && f.criterios.interaccion ? `${fmt(f.criterios.interaccion, 1)}/5` : "—")}
+            ${row("Adaptación (valoración del tutor)", f && f.criterios.adaptacion ? `${fmt(f.criterios.adaptacion, 1)}/5` : "—")}
+            ${row("Comprensión · listening", ind.listening.now === null ? "—" : `${fmt(ind.listening.now)} %`, this.trendArrow(ind.listening.now, ind.listening.before, true, " pts"))}
+          </ul>
+          <p class="mt-2 text-xs text-zinc-500">Son tendencias, no un nivel: el nivel solo lo da el chequeo mensual.</p>
+        </div>`;
+
+      const head = (right) => `<div class="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 class="text-sm font-semibold text-zinc-200">Tu nivel de expresión</h2>${right}</div>`;
+
+      if (!last) {
+        return `<div class="rounded-2xl border border-sky-400/25 bg-zinc-900/40 p-6 space-y-5">
+          ${head(`<span class="text-xs text-zinc-500">Escala MCER · Cambridge</span>`)}
+          <p class="text-sm text-zinc-300 leading-relaxed">Aún no tienes tu <strong>punto de partida</strong>. Abre Claude Code en la carpeta del proyecto y escribe <code class="font-mono text-sky-300">/chequeo-nivel</code> (unos 25 minutos, mejor respondiendo en voz alta con Win + H). Al terminar, importa aquí el archivo <code class="font-mono text-xs text-zinc-400">nivel-para-app-….json</code> desde «Copia de seguridad».</p>
+          ${indicators}
+        </div>`;
+      }
+
+      const age = Util.daysBetween(last.fecha, today);
+      const tr = N.trend(h);
+      const lo = 140, hi = 200, pos = (p) => `${Math.min(100, Math.max(0, ((p - lo) / (hi - lo)) * 100))}%`;
+      const goal = N.toScore(N.GOAL);
+      const ticks = ["B1", "B1+", "B2", "B2+", "C1", "C1+"].map((l) => `<span class="absolute -translate-x-1/2 text-[10px] text-zinc-500" style="left:${pos(N.toScore(l))}">${l}</span>`).join("");
+      const dots = h.slice(0, -1).map((e) => `<span class="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-zinc-500" style="left:${pos(e.global.puntos)}" title="${e.fecha}: ${e.global.nivel}"></span>`).join("");
+      const scale = `<div class="pt-1 pb-5">
+          <div class="relative h-2 rounded-full bg-gradient-to-r from-rose-500/40 via-amber-400/40 via-50% to-emerald-400/50">
+            <span class="absolute -top-1.5 h-5 border-l-2 border-dashed border-emerald-300" style="left:${pos(goal)}" title="Objetivo ${N.GOAL}"></span>
+            ${dots}
+            <span class="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-zinc-50 ring-4 ring-sky-400/40" style="left:${pos(last.global.puntos)}" title="Ahora: ${last.global.nivel}"></span>
+          </div>
+          <div class="relative mt-2 h-3">${ticks}</div>
+        </div>`;
+
+      const crit = Object.entries(N.CRITERIA).map(([k, label]) => {
+        const lv = last.criterios[k].nivel, d = tr ? tr.criterios[k] : null;
+        const isFocus = last.foco.criterio === k;
+        return `<div class="rounded-lg border ${isFocus ? "border-amber-400/40 bg-amber-400/5" : "border-zinc-800 bg-zinc-950/40"} px-3 py-2" title="${Util.esc(last.criterios[k].evidencia)}">
+            <div class="text-[11px] uppercase tracking-wider text-zinc-500">${label}${isFocus ? " · foco" : ""}</div>
+            <div class="mt-0.5 flex items-baseline gap-2"><span class="text-lg font-semibold ${this.levelTone(lv)}">${lv}</span>
+            ${d ? `<span class="text-xs ${d > 0 ? "text-emerald-400" : "text-rose-400"}">${d > 0 ? "↑" : "↓"}</span>` : ""}</div></div>`;
+      }).join("");
+
+      const map = N.situationMap(h);
+      const sits = Object.entries(N.SITUATIONS).map(([k, label]) => {
+        const s = map[k];
+        return `<span class="inline-flex items-center gap-1.5 rounded-md border ${s ? "border-zinc-700 bg-zinc-900" : "border-dashed border-zinc-800 text-zinc-600"} px-2 py-1 text-xs" ${s ? `title="Evaluado el ${s.fecha}"` : ""}>
+            <span class="${s ? "text-zinc-300" : ""}">${label}</span><span class="font-semibold ${s ? this.levelTone(s.nivel) : ""}">${s ? s.nivel : "—"}</span></span>`;
+      }).join("");
+
+      const point = (p, good) => `<li class="text-sm leading-relaxed"><span class="${good ? "text-emerald-300" : "text-amber-200"}">${Util.esc(p.texto)}</span>
+          ${p.evidencia ? `<div class="text-xs italic text-zinc-500">“${Util.esc(p.evidencia)}”</div>` : ""}
+          ${p.accion ? `<div class="text-xs text-zinc-300">→ ${Util.esc(p.accion)}</div>` : ""}</li>`;
+
+      return `<div class="rounded-2xl border ${age >= 30 ? "border-amber-400/30" : "border-sky-400/25"} bg-zinc-900/40 p-6 space-y-5">
+          ${head(`<span class="text-xs ${age >= 30 ? "text-amber-300" : "text-zinc-500"}">${age >= 30 ? "Toca chequeo: /chequeo-nivel · " : ""}Chequeo del ${last.fecha} (${age === 0 ? "hoy" : `hace ${Util.plural(age, "día", "días")}`})</span>`)}
+          <div class="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <div class="flex items-baseline gap-3"><span class="text-5xl font-semibold tracking-tight ${this.levelTone(last.global.nivel)}">${last.global.nivel}</span>
+              <span class="text-sm text-zinc-400 tabular-nums">${last.global.puntos} · escala Cambridge</span></div>
+              <p class="mt-1 text-xs text-zinc-500">${tr ? `<span class="${tr.global > 0 ? "text-emerald-400" : tr.global < 0 ? "text-rose-400" : "text-zinc-400"}">${tr.global > 0 ? "↑ +" : tr.global < 0 ? "↓ " : "= "}${tr.global ? tr.global : ""}</span> desde el chequeo anterior · ` : "Punto de partida · "}margen ± medio nivel · objetivo <span class="text-emerald-300">${N.GOAL}</span></p>
+            </div>
+            <p class="text-xs text-zinc-400 max-w-xs">Foco hasta el próximo chequeo: <strong class="text-amber-200">${N.CRITERIA[last.foco.criterio]}</strong>${last.foco.situacion ? ` en <strong class="text-amber-200">${N.SITUATIONS[last.foco.situacion]}</strong>` : ""}. /fluidez-activa lo trabaja automáticamente.</p>
+          </div>
+          ${scale}
+          <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">${crit}</div>
+          <div><h3 class="text-[11px] uppercase tracking-wider text-zinc-500 mb-2">Mapa de situaciones</h3><div class="flex flex-wrap gap-1.5">${sits}</div></div>
+          <div class="grid gap-4 sm:grid-cols-2">
+            <div><h3 class="text-[11px] uppercase tracking-wider text-emerald-400/80">Puntos fuertes</h3><ul class="mt-1.5 space-y-2">${last.fuertes.map((p) => point(p, true)).join("")}</ul></div>
+            <div><h3 class="text-[11px] uppercase tracking-wider text-amber-300/80">A mejorar</h3><ul class="mt-1.5 space-y-2">${last.debiles.map((p) => point(p, false)).join("")}</ul></div>
+          </div>
+          ${indicators}
+        </div>`;
+    },
+
     /* ---- HOME ---- */
     home() {
       const st = Stats.streak();
@@ -835,6 +982,7 @@
           <span class="text-xs">${v.stars === null ? "" : this.stars(v.stars)}</span></div></div>`;
       }).join("");
 
+      const levelCard = this.levelCard();
       const recurring = Stats.recurringErrors();
       const errorDrillSize = recurring.length ? Session.errorQueueSize() : 0;
       const errorRows = recurring.slice(0, 5).map(({ p, status, active }) => {
@@ -948,6 +1096,8 @@
         </div>
 
         ${c1Hint}
+
+        ${levelCard}
 
         ${errorsCard}
 
@@ -1610,16 +1760,26 @@
         const parsed = C.State.parseFile(await file.text());
         const z = document.getElementById("backup-zone");
         if (!z) return;
+        // Archivos que solo AÑADEN (no hace falta confirmar): no tocan el resto del progreso.
         if (parsed.kind === "bank") {
-          // Archivo de vocabulario (/fluidez-activa): se AÑADE al banco, no reemplaza nada.
-          const preview = C.Bank.merge(Store.state.custom, parsed.words, Util.today());
-          if (!preview.added) { this.pendingImport = null; return this.backupMsg(`Las ${Util.plural(parsed.words.length, "expresión", "expresiones")} del archivo ya estaban en tu banco.`, "text-zinc-300"); }
-          this.pendingImport = { bank: parsed.words };
-          z.innerHTML = `<div class="rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-4 text-emerald-100 space-y-2">
-            <p>Archivo de vocabulario: se <strong>añaden ${Util.plural(preview.added, "expresión", "expresiones")}</strong> a tu banco${preview.skipped ? ` (${preview.skipped} ya ${preview.skipped === 1 ? "estaba" : "estaban"})` : ""}. Tu progreso no cambia.</p>
-            <div class="flex gap-3 pt-1"><button data-action="import-yes" class="rounded-lg bg-emerald-400 px-3 py-1.5 text-xs font-semibold text-zinc-950">Añadir al banco</button>
-            <button data-action="import-no" class="text-xs hover:underline">Cancelar</button></div></div>`;
-          return;
+          // /fluidez-activa: chunks nuevos para el banco + resumen para «Tu nivel».
+          const st = Store.state, r = C.Bank.merge(st.custom, parsed.words, Util.today());
+          st.custom = r.custom;
+          if (parsed.fluidez && (!st.fluidez || parsed.fluidez.fecha >= st.fluidez.fecha)) st.fluidez = parsed.fluidez;
+          Store.save(); this.pendingImport = null;
+          this.go("home");
+          const parts = [r.added ? `${Util.plural(r.added, "expresión añadida", "expresiones añadidas")} a tu banco` : parsed.words.length ? "Las expresiones ya estaban en tu banco" : "", parsed.fluidez ? "indicadores de fluidez actualizados" : ""].filter(Boolean);
+          const msg = parts.join(" · ");
+          return this.backupMsg(`${msg.charAt(0).toUpperCase()}${msg.slice(1)}. Tu progreso no cambia.`, "text-emerald-300");
+        }
+        if (parsed.kind === "nivel") {
+          // /chequeo-nivel: historial de nivel de expresión.
+          const st = Store.state, before = st.nivel.length;
+          st.nivel = C.Nivel.merge(st.nivel, parsed.entries);
+          Store.save(); this.pendingImport = null;
+          this.go("home");
+          const last = st.nivel[st.nivel.length - 1];
+          return this.backupMsg(`Nivel actualizado: ${last.global.nivel} (${last.global.puntos}) · ${Util.plural(st.nivel.length, "chequeo", "chequeos")}${st.nivel.length > before ? "" : " (ya estaban)"}. Tu progreso no cambia.`, "text-emerald-300");
         }
         const next = parsed.state;
         this.pendingImport = next;
@@ -1665,11 +1825,7 @@
           case "export": this.exportProgress(); break;
           case "import": { const f = document.getElementById("import-file"); if (f) { f.value = ""; f.click(); } break; }
           case "import-yes":
-            if (this.pendingImport && this.pendingImport.bank) {
-              const r = C.Bank.merge(Store.state.custom, this.pendingImport.bank, Util.today());
-              Store.state.custom = r.custom; Store.save(); this.pendingImport = null;
-              this.go("home"); this.backupMsg(`${Util.plural(r.added, "expresión añadida", "expresiones añadidas")} a tu banco. Entrarán en tus repasos.`, "text-emerald-300");
-            } else if (this.pendingImport) {
+            if (this.pendingImport) {
               Store.replace(this.pendingImport); this.pendingImport = null; Session.clearSnapshot();
               this.go("home"); this.backupMsg("Progreso importado.", "text-emerald-300");
             }

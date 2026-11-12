@@ -25,7 +25,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
-const { Util, SRS, Errors, State, Bank } = require("../js/core.js");
+const { Util, SRS, Errors, State, Bank, Nivel } = require("../js/core.js");
 
 const ROOT = path.join(__dirname, "..");
 const DIR = process.env.FLUIDEZ_DIR ? path.resolve(process.env.FLUIDEZ_DIR) : path.join(ROOT, "progreso");
@@ -123,7 +123,12 @@ function cmdEstado() {
   // Tema: el que hace más tiempo que no sale (o nunca).
   const lastByTema = {};
   for (const s of d.sesiones) lastByTema[s.tema] = s.fecha;
-  const tema = Object.keys(TEMAS).sort((a, b) => (lastByTema[a] || "").localeCompare(lastByTema[b] || ""))[0];
+  const rotation = Object.keys(TEMAS).sort((a, b) => (lastByTema[a] || "").localeCompare(lastByTema[b] || ""))[0];
+  // Si hay un chequeo de nivel, 1 de cada 2 lecciones va al tema de la situación más débil.
+  const nivel = levelFocus();
+  const focusTema = nivel && nivel.foco.situacion ? SITUATION_TEMA[nivel.foco.situacion] : null;
+  const lastTema = d.sesiones.length ? d.sesiones[d.sesiones.length - 1].tema : null;
+  const tema = focusTema && TEMAS[focusTema] && lastTema !== focusTema ? focusTema : rotation;
 
   // Racha: días seguidos con sesión, contando desde hoy (o desde ayer si hoy aún no hay).
   const dates = new Set(d.sesiones.map((s) => s.fecha));
@@ -136,7 +141,15 @@ function cmdEstado() {
   out.push(`Sesiones: ${d.sesiones.length}${last ? ` · última: ${last.fecha} (${TEMAS[last.tema] ? last.tema : last.tema || "—"})` : ""} · racha: ${racha} ${racha === 1 ? "día" : "días"}`);
   out.push(`Chunks: ${chunks.length} · activos ${by[STATUS.activa].length} · en uso ${by[STATUS.uso].length} · nuevos sin producir ${by[STATUS.nueva].length}`);
   out.push("");
-  out.push(`## Tema sugerido hoy: ${tema} — ${TEMAS[tema]}`);
+  out.push(`## Tema sugerido hoy: ${tema} — ${TEMAS[tema]}${tema === focusTema ? " (foco de nivel)" : ""}`);
+  out.push("");
+  if (!nivel) out.push("## Foco de nivel: aún no hay chequeo. Propón al alumno hacer /chequeo-nivel para tener su punto de partida.");
+  else {
+    const age = Util.daysBetween(nivel.fecha, today);
+    out.push(`## Foco de nivel (chequeo del ${nivel.fecha}: ${nivel.global.nivel}${age >= 30 ? " — hace más de 30 días: propón /chequeo-nivel" : ""})`);
+    out.push(`Criterio más débil: ${Nivel.CRITERIA[nivel.foco.criterio]} (${nivel.criterios[nivel.foco.criterio].nivel})${nivel.foco.situacion ? ` · situación: ${Nivel.SITUATIONS[nivel.foco.situacion]} (${nivel.situaciones[nivel.foco.situacion]})` : ""}`);
+    for (const w of nivel.debiles) out.push(`- ${w.texto} → ${w.accion}`);
+  }
   out.push("");
   out.push(`## Repaso de producción (toca hoy: ${due.length})`);
   if (!due.length) out.push("- (nada vencido)");
@@ -228,6 +241,10 @@ function cmdRegistrar() {
     aciertos: ok,
     espontaneos: resultados.filter((r) => r.espontaneo && SRS.quality(r.q) >= 3).length,
     circunloquios: Math.max(0, Number(p.circunloquios) || 0),
+    // Valoración rápida del tutor (1–5) para los indicadores continuos de «Tu nivel».
+    criterios: Object.fromEntries(["interaccion", "adaptacion", "fluidez"]
+      .map((k) => [k, Number(p.criterios && p.criterios[k])])
+      .filter(([, v]) => Number.isFinite(v) && v >= 1 && v <= 5)),
     foco: Array.isArray(p.foco) ? p.foco.map(String).slice(0, 5) : [],
     logros: Array.isArray(p.logros) ? p.logros.map(String).slice(0, 5) : []
   });
@@ -241,19 +258,53 @@ function cmdRegistrar() {
   if (pend) console.log(`→ ${pend} chunks aún no están en la app. Ejecuta: node scripts/fluidez.js banco`);
 }
 
+/* Resumen para los indicadores continuos de «Tu nivel de expresión» en la app. */
+function summary(d) {
+  if (!d.sesiones.length) return null;
+  const today = Util.today();
+  const chunks = Object.values(d.chunks);
+  const recent = d.sesiones.filter((s) => Util.daysBetween(s.fecha, today) <= 30);
+  const prod = recent.reduce((a, s) => a + (s.aciertos || 0), 0);
+  const esp = recent.reduce((a, s) => a + (s.espontaneos || 0), 0);
+  const criterios = {};
+  for (const k of ["interaccion", "adaptacion", "fluidez"]) {
+    const vals = d.sesiones.slice(-5).map((s) => s.criterios && s.criterios[k]).filter((v) => Number.isFinite(v));
+    if (vals.length) criterios[k] = Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
+  }
+  return {
+    fecha: d.sesiones[d.sesiones.length - 1].fecha,
+    activos: chunks.filter((c) => statusOf(c) === STATUS.activa).length,
+    enUso: chunks.filter((c) => statusOf(c) === STATUS.uso).length,
+    sesiones: d.sesiones.length,
+    espontaneoPct: prod ? Math.round((esp / prod) * 100) : 0,
+    criterios
+  };
+}
+
 /* ------------------------------------------------------------------- banco */
 function cmdBanco() {
   const d = load();
   const all = process.argv.includes("--todo");
   const list = Object.values(d.chunks).filter((c) => all || !c.enviadoApp);
-  if (!list.length) { console.log("No hay chunks nuevos para la app."); return; }
-  const out = Bank.toFile(list.map((c) => ({ en: c.en, es: c.es, example: c.ejemplo })));
+  const sum = summary(d);
+  if (!list.length && !sum) { console.log("No hay chunks nuevos ni sesiones para la app."); return; }
+  const out = Bank.toFile(list.map((c) => ({ en: c.en, es: c.es, example: c.ejemplo })), new Date(), sum);
   fs.mkdirSync(DIR, { recursive: true });
   const f = path.join(DIR, `banco-para-app-${Util.today()}.json`);
   fs.writeFileSync(f, JSON.stringify(out, null, 2) + "\n", "utf8");
   for (const c of list) c.enviadoApp = true;
   save(d);
-  console.log(`✓ ${rel(f)} · ${list.length} chunks. En la app: panel → Copia de seguridad → Importar copia → «Añadir al banco».`);
+  console.log(`✓ ${rel(f)} · ${list.length ? `${list.length} chunks nuevos` : "sin chunks nuevos"} + resumen de fluidez. En la app: Panel → Copia de seguridad → Importar copia → «Añadir».`);
+}
+
+/* Foco de nivel del último /chequeo-nivel (progreso/nivel.json), si existe. */
+const SITUATION_TEMA = { "mark-1a1": "mark-1a1", reuniones: "reuniones", presentar: "reuniones", datos: "datos", "small-talk": "small-talk", social: "small-talk", historias: "historias", opiniones: "opiniones", problemas: "emociones", escrito: "mark-1a1" };
+function levelFocus() {
+  try {
+    const n = JSON.parse(fs.readFileSync(path.join(DIR, "nivel.json"), "utf8"));
+    const h = (n.chequeos || []).map(Nivel.tryNormalize).filter(Boolean);
+    return h.length ? h[h.length - 1] : null;
+  } catch (_) { return null; }
 }
 
 /* -------------------------------------------------------------------- main */

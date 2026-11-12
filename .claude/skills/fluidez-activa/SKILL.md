@@ -40,6 +40,7 @@ Antes de empezar, lee [referencia.md](referencia.md): tiene los marcos de circun
    - **Repaso:** hasta 5 chunks de "Repaso de producción" (los vencidos primero) y de "Nuevos aún sin producir".
    - **Errores de la app:** del patrón más grave (crítico antes que emergente), una situación para la producción forzada que obligue a usar la forma correcta. Por ejemplo, si el patrón es *Falso amigo* con "actually → currently", crea una situación en la que tenga que decir "currently".
    - **Banco de la app:** 1–2 palabras "aún no activas" como chunks obligatorios.
+   - **Foco de nivel** (del último `/chequeo-nivel`): dedica la ronda 3 de producción forzada a su criterio más débil. Si es Interacción, haz que Mark le interrumpa y le pida una réplica. Si es Adaptación, pide el mismo mensaje para dos personas distintas. Si es Coherencia, pide estructura (idea, razón, ejemplo, cierre). Si es Fluidez, aplica el límite de 10 segundos también en esa ronda. Si es Rango, exige un chunk de hoy en cada frase. Si es Corrección, exige la forma correcta del error que se cita. Si el script dice que no hay chequeo o que hace más de 30 días, propónselo al final en una línea.
 3. Saluda en inglés en una línea y enseña el plan en 3 líneas (en español): tema, cuántos repasos y una meta concreta de hoy.
 4. Recuérdale **una vez**: *"Si puedes, responde hablando: pulsa Win + H para dictar. Vale con fragmentos: lo importante es que salga."*
 
@@ -118,6 +119,7 @@ Cuatro preguntas rápidas y personales en inglés, de una en una (*"What's the l
     { "en": "fair enough", "q": 1 },
     { "en": "to be honest", "es": "la verdad", "q": 5, "espontaneo": true }
   ],
+  "criterios": { "interaccion": 3, "adaptacion": 4, "fluidez": 3 },
   "foco": ["Le cuesta arrancar las historias: practicar 'So, the other day…'"],
   "logros": ["Usó 'to be honest' por su cuenta en la ráfaga"]
 }
@@ -125,9 +127,10 @@ Cuatro preguntas rápidas y personales en inglés, de una en una (*"What's the l
 
    - `nuevos`: todos los chunks presentados hoy, incluidos los del circunloquio.
    - `resultados`: **una entrada por cada intento de producir un chunk** (calentamiento, frase personal, rondas y ráfaga). Si un chunk se intentó varias veces, apunta solo el último intento. Un chunk que no esté en `nuevos` ni en el progreso necesita `"es"`.
+   - `criterios`: tu impresión de hoy, de 1 a 5. **Interacción**: ¿responde a lo que le dices, pregunta, replica? **Adaptación**: ¿ajusta el tono a quién le habla? **Fluidez**: ¿le sale sin bloquearse? (1 = se bloquea a menudo, 3 = se defiende con esfuerzo, 5 = con soltura). Alimenta los indicadores continuos de «Tu nivel de expresión» en la app.
    - `foco`: 1–2 cosas concretas para la próxima sesión. `logros`: 1–2 cosas que ha conseguido hoy.
 2. Ejecuta `node scripts/fluidez.js registrar progreso/ultima-sesion.json`. Si da error, corrige el JSON y repite: el script no guarda nada mientras haya errores.
-3. Ejecuta `node scripts/fluidez.js banco` y dile en una línea que importe el archivo en la app (Panel → Copia de seguridad → Importar copia → «Añadir al banco»). Así sus chunks entran en el repaso diario de la app.
+3. Ejecuta `node scripts/fluidez.js banco` y dile en una línea que importe el archivo en la app (Panel → Copia de seguridad → Importar copia → «Añadir»). Así sus chunks entran en el repaso diario de la app y se actualizan sus indicadores de nivel.
 4. Resumen final, en español y en un máximo de 8 líneas: los chunks que ya son activos (★) según el script, el logro concreto de hoy, el foco de mañana y una frase de cierre en inglés.
 
 ## Escala de calidad (SM-2, la misma que usa la app)

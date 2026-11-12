@@ -320,6 +320,7 @@
         sessions: [],    // { date, ts, level, score: { block: { ok, total } } }
         custom: [],      // banco personal: { id, en, es, example, created }
         nivel: [],       // chequeos de expresión (ver Nivel), del más antiguo al más reciente
+        fluidez: null,   // último resumen de /fluidez-activa (ver Bank.summary)
         delivery: [],    // métricas de los retos hablados: { date, secs, words, wpm, fillers, authority, social }
         settings: { tts: true, voice: "en-GB", level: "b2", lastExport: null }
       };
@@ -381,6 +382,7 @@
         version: 4,
         errors,
         nivel: Array.isArray(parsed.nivel) ? Nivel.merge([], parsed.nivel.map(Nivel.tryNormalize).filter(Boolean)) : [],
+        fluidez: Bank.summary(parsed.fluidez),
         delivery: Array.isArray(parsed.delivery) ? parsed.delivery.filter(isObj).map(State.normalizeDelivery).filter(Boolean).slice(-State.MAX_DELIVERY) : [],
         streak: {
           current: Math.max(0, Number(st.current) || 0),
@@ -419,7 +421,7 @@
     parseFile(text) {
       let data;
       try { data = JSON.parse(text); } catch (_) { throw new Error("El archivo no es un JSON válido."); }
-      if (isObj(data) && data.app === "english-20-minutes" && data.kind === Bank.KIND) return { kind: "bank", words: Bank.parse(data) };
+      if (isObj(data) && data.app === "english-20-minutes" && data.kind === Bank.KIND) return { kind: "bank", words: Bank.parse(data), fluidez: Bank.summary(data.fluidez) };
       if (isObj(data) && data.app === "english-20-minutes" && data.kind === Nivel.KIND) return { kind: "nivel", entries: Nivel.parse(data) };
       return { kind: "state", state: State.fromImport(text) };
     },
@@ -446,14 +448,27 @@
       const en = str(w.en, 80).trim(), es = str(w.es, 80).trim();
       return en && es ? { en, es, example: str(w.example, 160).trim() } : null;
     },
-    toFile(words, now = new Date()) {
-      return { app: "english-20-minutes", format: 1, kind: Bank.KIND, exportedAt: now.toISOString(), words: words.map(Bank.clean).filter(Boolean) };
+    /* fluidez (opcional): resumen de /fluidez-activa para los indicadores de «Tu nivel». */
+    toFile(words, now = new Date(), fluidez = null) {
+      const out = { app: "english-20-minutes", format: 1, kind: Bank.KIND, exportedAt: now.toISOString(), words: words.map(Bank.clean).filter(Boolean) };
+      if (fluidez) out.fluidez = fluidez;
+      return out;
     },
     parse(data) {
       if (!isObj(data) || !Array.isArray(data.words)) throw new Error("El archivo de vocabulario no tiene palabras.");
       const words = data.words.slice(0, Bank.MAX_WORDS).map(Bank.clean).filter(Boolean);
-      if (!words.length) throw new Error("El archivo de vocabulario no tiene palabras válidas.");
+      if (!words.length && !Bank.summary(data.fluidez)) throw new Error("El archivo de vocabulario no tiene palabras válidas.");
       return words;
+    },
+    /* Resumen de fluidez: { fecha, activos, enUso, sesiones, espontaneoPct, criterios: { interaccion, adaptacion, fluidez } (1–5) }. */
+    summary(f) {
+      if (!isObj(f) || !isDate(f.fecha)) return null;
+      const crit = {};
+      if (isObj(f.criterios)) for (const k of ["interaccion", "adaptacion", "fluidez"]) {
+        const v = Number(f.criterios[k]);
+        if (Number.isFinite(v) && v >= 1 && v <= 5) crit[k] = Math.round(v * 10) / 10;
+      }
+      return { fecha: f.fecha, activos: nonNeg(f.activos), enUso: nonNeg(f.enUso), sesiones: nonNeg(f.sesiones), espontaneoPct: Math.min(100, nonNeg(f.espontaneoPct)), criterios: crit };
     },
     /* Añade al banco las palabras que no estén ya (sin distinguir mayúsculas). */
     merge(custom, words, today, idBase = Date.now().toString(36)) {

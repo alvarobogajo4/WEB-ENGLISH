@@ -54,7 +54,8 @@ icons/icon.svg      Icono
 tests/              Tests del núcleo (node:test, sin dependencias)
 scripts/validate.js Validador del contenido de data_c1.js
 scripts/fluidez.js  Progreso de la skill /fluidez-activa (estado · registrar · banco)
-.claude/skills/     Skill fluidez-activa (tutor de conversación en Claude Code)
+scripts/nivel.js    Chequeos de nivel de /chequeo-nivel (estado · metricas · registrar)
+.claude/skills/     Skills fluidez-activa (tutor) y chequeo-nivel (nivel de expresión)
 progreso/           Tus datos de fluidez activa (personales: fuera de git)
 package.json        Scripts: npm test · npm run validate · npm run check · npm run fluidez
 ```
@@ -87,6 +88,20 @@ La app entrena sobre todo el **reconocimiento**: eliges entre opciones. Para que
 - **El mismo algoritmo:** el progreso de los chunks usa el SM-2 de `js/core.js`. Un chunk es **activo** cuando lo produces bien en 3 repasos espaciados.
 
 Para ver tu estado sin abrir una lección: `npm run fluidez`.
+
+## Tu nivel de expresión
+
+El objetivo no es aprobar un examen, sino **expresarte con cualquier persona y en cualquier situación**. Por eso se mide la **producción**, no el reconocimiento, con los criterios del MCER para la expresión hablada más la adaptación de registro. El resultado se sitúa en la escala de Cambridge:
+
+| Nivel | B1 | B1+ | B2 | B2+ | C1 | C1+ |
+|---|---|---|---|---|---|---|
+| Escala Cambridge (aprox.) | 145 | 155 | 165 | 175 | 185 | 195 |
+
+- **Chequeo mensual** (`/chequeo-nivel` en Claude Code, unos 25 minutos). Son 6 tareas comparables de un mes a otro: small talk, contar algo que te pasó, opinar y defenderlo, discrepar o intervenir con Mark, explicar un dato y el mismo mensaje para tu jefe y para un amigo. Se evalúan 6 criterios (**rango, corrección, fluidez, interacción, coherencia y adaptación**), cada uno con una cita tuya como prueba, y un **mapa de situaciones**. Un script añade métricas objetivas: palabras por turno, variedad léxica, conectores, chunks propios y muletillas. Durante el chequeo no hay correcciones: el feedback llega al final.
+- **Indicadores continuos** entre chequeos: ritmo y muletillas de tus retos hablados, patrones de error, listening y, desde `/fluidez-activa`, chunks activos, porcentaje de uso espontáneo y la valoración del tutor sobre interacción y adaptación. Se muestran como tendencia, no como nivel.
+- **El foco cierra el círculo:** el criterio y la situación más débiles del último chequeo pasan a ser el foco de `/fluidez-activa`, que les dedica una ronda y orienta la elección de tema.
+- **En la app:** la tarjeta «Tu nivel de expresión» muestra tu nivel, tu posición en la escala con el objetivo (B2+), la evolución, los criterios, el mapa de situaciones, los puntos fuertes y débiles con su acción, y los indicadores. Importa `progreso/nivel-para-app-AAAA-MM-DD.json`: se añade y no reemplaza nada.
+- **Límites:** es una estimación con margen de ± medio nivel, no un certificado. La pronunciación no se evalúa, porque el dictado la convierte en texto.
 
 ## Ejecutar
 

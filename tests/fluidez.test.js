@@ -85,6 +85,45 @@ test("fluidez: banco genera un archivo que la app reconoce y no repite envíos",
   const parsed = State.parseFile(fs.readFileSync(path.join(sb.dir, file), "utf8"));
   assert.equal(parsed.kind, "bank");
   assert.deepEqual(parsed.words, [{ en: "fair enough", es: "es razonable", example: "Fair enough." }]);
-  assert.match(sb.run("banco"), /No hay chunks nuevos/);
+  // Segundo envío: ya no repite chunks, pero sí manda el resumen de fluidez.
+  assert.match(sb.run("banco"), /sin chunks nuevos \+ resumen/);
+  const again = State.parseFile(fs.readFileSync(path.join(sb.dir, file), "utf8"));
+  assert.deepEqual(again.words, []);
+  assert.equal(again.fluidez.sesiones, 1);
   assert.ok(SRS); // el script usa el mismo SM-2 que la app
+});
+
+test("fluidez: sin sesiones ni chunks, banco no crea nada", () => {
+  assert.match(sandbox().run("banco"), /No hay chunks nuevos ni sesiones/);
+});
+
+test("fluidez: el resumen para la app lleva activos, % espontáneo y la valoración del tutor", () => {
+  const sb = sandbox();
+  sb.run("registrar", sb.write("a.json", {
+    criterios: { interaccion: 2, adaptacion: 3, fluidez: 9 },
+    resultados: [{ en: "to be fair", es: "siendo justos", q: 5, espontaneo: true }, { en: "fair enough", es: "vale", q: 4 }]
+  }));
+  sb.run("registrar", sb.write("b.json", { criterios: { interaccion: 4 }, resultados: [] }));
+  const d = JSON.parse(fs.readFileSync(path.join(sb.dir, "fluidez-activa.json"), "utf8"));
+  assert.deepEqual(d.sesiones[0].criterios, { interaccion: 2, adaptacion: 3 }); // 9 fuera de rango
+  sb.run("banco");
+  const file = fs.readdirSync(sb.dir).find((n) => n.startsWith("banco-para-app-"));
+  const f = State.parseFile(fs.readFileSync(path.join(sb.dir, file), "utf8")).fluidez;
+  assert.equal(f.espontaneoPct, 50);
+  assert.equal(f.enUso, 2);
+  assert.deepEqual(f.criterios, { interaccion: 3, adaptacion: 3 }); // media de las últimas sesiones
+});
+
+test("fluidez: estado muestra el foco del último chequeo y orienta el tema hacia él", () => {
+  const sb = sandbox();
+  assert.match(sb.run("estado"), /aún no hay chequeo/);
+  const crit = (lvl) => Object.fromEntries(["rango", "correccion", "fluidez", "interaccion", "coherencia", "adaptacion"].map((k) => [k, { nivel: k === "interaccion" ? "B1+" : lvl, evidencia: "cita" }]));
+  fs.writeFileSync(path.join(sb.dir, "nivel.json"), JSON.stringify({ version: 1, chequeos: [{
+    fecha: Util.today(), criterios: crit("B2"), situaciones: { reuniones: "B1+", "small-talk": "B2+" },
+    fuertes: [{ texto: "Small talk", evidencia: "x" }], debiles: [{ texto: "Discrepar con tacto", evidencia: "I don't agree", accion: "Practicar 'I see your point, but…'" }]
+  }] }));
+  const out = sb.run("estado");
+  assert.match(out, /Tema sugerido hoy: reuniones .*\(foco de nivel\)/);
+  assert.match(out, /Criterio más débil: Interacción \(B1\+\) · situación: Reuniones: intervenir y discrepar/);
+  assert.match(out, /Discrepar con tacto → Practicar/);
 });
