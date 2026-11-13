@@ -34,7 +34,7 @@ Antes de empezar, lee [referencia.md](referencia.md): tiene los marcos de circun
 
 ### 0 · Arranque (1 min)
 
-1. Ejecuta `node scripts/fluidez.js estado`. El alumno usa la app en el iPhone y deja su copia en OneDrive/English20: si el estado dice que la copia es antigua (o que no hay), pídele en una línea que en la app pulse Exportar copia → Guardar en Archivos → OneDrive → English20, y vuelve a ejecutarlo. Si te da otra ruta, añade `--export "<ruta>"`.
+1. Ejecuta `node scripts/fluidez.js estado`. Si dice «sincronizada automáticamente desde la nube», no hay que pedir nada. Si no, el alumno usa la app en el iPhone sin la nube activada: si la copia es antigua (o no hay), recomiéndale en una línea activar «Guardado automático» en la app, o pídele en una línea que en la app pulse Exportar copia → Guardar en Archivos → OneDrive → English20, y vuelve a ejecutarlo. Si te da otra ruta, añade `--export "<ruta>"`.
 2. Con el resultado decide:
    - **Tema:** el que pase el alumno como argumento o, si no, el tema sugerido.
    - **Repaso:** hasta 5 chunks de "Repaso de producción" (los vencidos primero) y de "Nuevos aún sin producir".

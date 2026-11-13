@@ -123,6 +123,7 @@ function cmdRegistrar() {
   const appFile = path.join(DIR, `nivel-para-app-${entry.fecha}.json`);
   fs.writeFileSync(appFile, JSON.stringify(Nivel.toFile(h), null, 2) + "\n", "utf8");
   const phone = require("./onedrive.js").toBridge(appFile);
+  const cloud = require("./nube.js").upload(appFile);
 
   const tr = Nivel.trend(h);
   const lines = [
@@ -131,7 +132,9 @@ function cmdRegistrar() {
     `Criterios: ${Object.entries(Nivel.CRITERIA).map(([k, l]) => `${l} ${entry.criterios[k].nivel}`).join(" · ")}`,
     `Foco: ${Nivel.CRITERIA[entry.foco.criterio]}${entry.foco.situacion ? ` · ${Nivel.SITUATIONS[entry.foco.situacion]}` : ""}`,
     `Métricas: ${metricas.palabrasPorTurno} palabras/turno · variedad ${metricas.variedadLexica} · ${metricas.conectores} conectores · ${metricas.chunksActivos} chunks tuyos · muletillas ${metricas.muletillas}/100 · atenuadores ${metricas.atenuadores}/100`,
-    phone
+    cloud
+      ? "→ Subido a la nube: la tarjeta «Tu nivel de expresión» se actualizará sola al abrir la app en el iPhone."
+      : phone
       ? `→ En el iPhone: Copia de seguridad → Importar copia → Archivos → OneDrive → English20 → ${path.basename(appFile)}`
       : `→ Para verlo en la app: Panel → Copia de seguridad → Importar copia → ${rel(appFile)}`
   ];

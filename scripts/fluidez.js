@@ -27,6 +27,8 @@ const path = require("node:path");
 const os = require("node:os");
 const { Util, SRS, Errors, State, Bank, Nivel } = require("../js/core.js");
 const { bridgeDir, toBridge, FOLDER } = require("./onedrive.js");
+const nube = require("./nube.js");
+const CLOUD_FILE = "nube-estado.json";
 
 const ROOT = path.join(__dirname, "..");
 const DIR = process.env.FLUIDEZ_DIR ? path.resolve(process.env.FLUIDEZ_DIR) : path.join(ROOT, "progreso");
@@ -89,8 +91,12 @@ function findExport() {
   // Candidatas: el estado de `npm start` (progreso/app-estado.json), la carpeta puente
   // con el iPhone (OneDrive/English20) y las carpetas habituales. Gana la más reciente.
   let best = null;
-  const synced = path.join(DIR, SYNC_FILE);
-  if (fs.existsSync(synced)) best = { p: synced, t: fs.statSync(synced).mtimeMs };
+  for (const f of [SYNC_FILE, CLOUD_FILE]) {
+    const p = path.join(DIR, f);
+    if (!fs.existsSync(p)) continue;
+    const t = fs.statSync(p).mtimeMs;
+    if (!best || t > best.t) best = { p, t };
+  }
   const home = os.homedir();
   const dirs = [bridgeDir(), ...(process.env.FLUIDEZ_DIR ? [] : [ROOT, DIR, path.join(home, "Downloads"), path.join(home, "Descargas"), path.join(home, "OneDrive", "Escritorio"), path.join(home, "OneDrive", "Documentos"), path.join(home, "Desktop")])].filter(Boolean);
   for (const d of dirs) {
@@ -106,6 +112,7 @@ function findExport() {
 }
 
 function readExport() {
+  nube.pullState(DIR); // la copia que la app guarda sola en la nube (si está activada)
   const p = findExport();
   if (!p) return null;
   try { return { path: p, state: State.fromImport(fs.readFileSync(p, "utf8")) }; }
@@ -176,11 +183,11 @@ function cmdEstado() {
   else if (exp.error) out.push(`## App: no pude leer ${exp.path} (${exp.error})`);
   else {
     const st = exp.state;
-    const auto = path.basename(exp.path) === SYNC_FILE;
+    const auto = [SYNC_FILE, CLOUD_FILE].includes(path.basename(exp.path));
     const bridge = bridgeDir();
     const fromPhone = !!bridge && path.dirname(path.resolve(exp.path)) === path.resolve(bridge);
     const age = auto ? 0 : Util.daysBetween(st.settings.lastExport || today, today);
-    out.push(`## App (${auto ? `sincronizada automáticamente: ${rel(exp.path)}` : `${fromPhone ? `copia del móvil en OneDrive/${FOLDER}` : `copia: ${exp.path}`}${st.settings.lastExport ? `, del ${st.settings.lastExport}` : ""}`}${age > 7 ? " — ¡antigua! en el iPhone: Copia de seguridad → Enviar copia → OneDrive/English20" : ""})`);
+    out.push(`## App (${auto ? `sincronizada automáticamente${path.basename(exp.path) === CLOUD_FILE ? " desde la nube" : ""}: ${rel(exp.path)}` : `${fromPhone ? `copia del móvil en OneDrive/${FOLDER}` : `copia: ${exp.path}`}${st.settings.lastExport ? `, del ${st.settings.lastExport}` : ""}`}${age > 7 ? " — ¡antigua! en el iPhone: Copia de seguridad → Enviar copia → OneDrive/English20" : ""})`);
     out.push(`Nivel: ${String(st.settings.level).toUpperCase()} · sesiones en la app: ${st.sessions.length}`);
     const ranked = Errors.ranked(st.errors || {}, today).slice(0, 4);
     out.push("Errores recurrentes:");
@@ -317,8 +324,11 @@ function cmdBanco() {
   for (const c of list) c.enviadoApp = true;
   save(d);
   const phone = toBridge(f);
+  const cloud = nube.upload(f);
   console.log(`✓ ${rel(f)} · ${list.length ? `${list.length} chunks nuevos` : "sin chunks nuevos"} + resumen de fluidez.`);
-  console.log(phone
+  console.log(cloud
+    ? "→ Subido a la nube: la app del iPhone lo añadirá sola la próxima vez que la abras. No tienes que hacer nada."
+    : phone
     ? `→ En el iPhone: Copia de seguridad → Importar copia → Archivos → OneDrive → ${FOLDER} → ${path.basename(f)} (con npm start en el ordenador se añade solo).`
     : "→ En la app: Copia de seguridad → Importar copia (con npm start en el ordenador se añade solo).");
 }

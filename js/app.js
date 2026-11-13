@@ -89,6 +89,7 @@
       try { localStorage.setItem(KEY, JSON.stringify(state)); persistent = true; }
       catch (e) { persistent = false; }
       Sync.schedule();
+      Nube.markDirty();
     }
     function reset() { state = C.State.fresh(); save(); }
     function replace(next) { state = next; recoveredKey = null; save(); }
@@ -149,6 +150,124 @@
       const body = JSON.stringify(C.State.toExport(Store.state));
       fetch("./api/app-estado", { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: keepalive && body.length < 60000 }).catch(() => {});
     }
+  };
+
+  /* ------------------------------------------------------------------ Nube */
+  /* Guardado automático en un gist secreto de la cuenta de GitHub del alumno.
+   * - La llave (token con permiso solo para gists) vive en localStorage aparte
+   *   (clave e20_cloud): nunca entra en las copias exportadas.
+   * - Cada cambio se sube a los pocos segundos (estado.json).
+   * - Al abrir la app: se añaden los archivos que dejan las skills del ordenador
+   *   (banco-/nivel-para-app-…) y, si otro dispositivo guardó algo más nuevo, se usa
+   *   (C.Cloud.decide). Si los dos cambiaron, se pregunta. */
+  const Nube = {
+    KEY: "e20_cloud", API: "https://api.github.com",
+    TOKEN_URL: "https://github.com/settings/tokens/new?scopes=gist&description=English%2020%20(app)",
+    cfg: {}, timer: null, status: "", error: "", conflict: null, busy: false,
+    load() {
+      try { this.cfg = JSON.parse(localStorage.getItem(this.KEY) || "{}") || {}; } catch (_) { this.cfg = {}; }
+      if (!this.cfg.device) { this.cfg.device = `d-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`; this.saveCfg(); }
+    },
+    saveCfg() { try { localStorage.setItem(this.KEY, JSON.stringify(this.cfg)); } catch (_) { /* sin almacenamiento */ } },
+    get on() { return !!(this.cfg.token && this.cfg.gistId); },
+    async api(path, opts = {}) {
+      const r = await fetch(this.API + path, {
+        ...opts,
+        headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${this.cfg.token}`, ...(opts.body ? { "Content-Type": "application/json" } : {}) }
+      });
+      if (!r.ok) throw Object.assign(new Error(r.status === 401 ? "La llave no es válida o ha caducado." : `GitHub respondió ${r.status}.`), { status: r.status });
+      return r.status === 204 ? null : r.json();
+    },
+    localEmpty() { const st = Store.state; return !st.sessions.length && !Object.keys(st.items).length && !st.custom.length; },
+
+    /* Conectar: valida la llave, busca el gist (o lo crea) y sincroniza por primera vez. */
+    async connect(token) {
+      token = String(token || "").trim();
+      if (!/^(ghp_|github_pat_|gho_)[A-Za-z0-9_]{20,}$/.test(token)) throw new Error("Eso no parece una llave de GitHub: empieza por «ghp_». Cópiala entera.");
+      this.cfg.token = token;
+      try {
+        const gists = await this.api("/gists?per_page=100");
+        let g = gists.find((x) => x.description === C.Cloud.DESCRIPTION);
+        if (!g) g = await this.api("/gists", { method: "POST", body: JSON.stringify({ description: C.Cloud.DESCRIPTION, public: false, files: { "LEEME.md": { content: "Progreso de la app English 20 Minutes. Lo actualiza la app sola: no lo edites ni lo borres." } } }) });
+        this.cfg.gistId = g.id;
+        this.cfg.lastSyncAt = 0;
+        this.saveCfg();
+      } catch (e) { delete this.cfg.token; delete this.cfg.gistId; this.saveCfg(); throw e; }
+      await this.sync();
+    },
+    disconnect() { delete this.cfg.token; delete this.cfg.gistId; this.cfg.lastSyncAt = 0; this.saveCfg(); this.status = ""; this.conflict = null; },
+
+    markDirty() {
+      if (!this.on || this.applying) return;
+      this.cfg.localChangedAt = Date.now(); this.saveCfg();
+      clearTimeout(this.timer);
+      this.timer = setTimeout(() => this.push(), 4000);
+    },
+    payload() { return JSON.stringify({ ...C.State.toExport(Store.state), device: this.cfg.device }); },
+    async push(keepalive = false) {
+      if (!this.on || this.conflict) return;
+      clearTimeout(this.timer);
+      const content = this.payload();
+      try {
+        await this.api(`/gists/${this.cfg.gistId}`, { method: "PATCH", body: JSON.stringify({ files: { [C.Cloud.STATE_FILE]: { content } } }), keepalive: keepalive && content.length < 60000 });
+        this.cfg.lastSyncAt = Date.now(); this.saveCfg();
+        this.error = ""; this.status = "saved";
+      } catch (e) { this.error = e.message || "Sin conexión"; }
+      this.refresh();
+    },
+    async fileText(f) { return f.truncated ? (await fetch(f.raw_url)).text() : f.content; },
+
+    /* Al abrir la app o volver a ella. */
+    async sync() {
+      if (!this.on || this.busy) return;
+      this.busy = true;
+      try {
+        const g = await this.api(`/gists/${this.cfg.gistId}`);
+        const files = g.files || {};
+        const notes = [];
+        this.error = "";
+        // 1) Primero se decide con el estado ANTES de tocar nada (si no, añadir el
+        //    banco marcaría este dispositivo como cambiado y saldría un falso conflicto).
+        const sf = files[C.Cloud.STATE_FILE];
+        let remote = null;
+        if (sf) { try { remote = JSON.parse(await this.fileText(sf)); } catch (_) { remote = null; } }
+        const action = C.Cloud.decide({ remote, device: this.cfg.device, lastSyncAt: this.cfg.lastSyncAt || 0, localChangedAt: this.cfg.localChangedAt || 0, localEmpty: this.localEmpty() });
+        if (action === "adopt") { this.adopt(remote); notes.push("Progreso actualizado con lo que hiciste en otro dispositivo."); }
+        if (action === "conflict") this.conflict = remote;
+        else {
+          // 2) Lo que dejan las skills del ordenador: solo AÑADE.
+          for (const [name, f] of Object.entries(files)) {
+            if (!C.Cloud.INBOX_RE.test(name) || Store.state.settings.synced.includes(name)) continue;
+            try {
+              const parsed = C.State.parseFile(await this.fileText(f));
+              if (parsed.kind === "bank" || parsed.kind === "nivel") notes.push(App.applyFile(parsed));
+            } catch (_) { /* archivo no válido: se ignora */ }
+            Store.state.settings.synced = [...Store.state.settings.synced, name].slice(-100);
+            Store.save();
+          }
+          // 3) Se sube el resultado.
+          await this.push();
+        }
+        if (notes.length) Sync.note = notes.join(" ");
+      } catch (e) { this.error = e.message || "Sin conexión: se guardará cuando vuelva la red."; }
+      finally { this.busy = false; }
+      this.refresh();
+    },
+    adopt(remote) {
+      const next = C.State.normalize(remote.state);
+      this.applying = true;
+      Store.replace(next);
+      this.applying = false;
+      this.cfg.lastSyncAt = Date.now(); this.cfg.localChangedAt = this.cfg.lastSyncAt; this.saveCfg();
+      this.status = "saved";
+    },
+    resolve(useCloud) {
+      const remote = this.conflict;
+      this.conflict = null;
+      if (useCloud && remote) this.adopt(remote); else this.push();
+      this.refresh();
+    },
+    refresh() { if (App.view === "home") Views.render(); }
   };
 
   /* --------------------------------------------------------------- Content */
@@ -1194,6 +1313,34 @@
       const expAge = lastExp ? Util.daysBetween(lastExp, Util.today()) : null;
       const expLabel = lastExp ? (expAge === 0 ? "hoy" : `hace ${Util.plural(expAge, "día", "días")}`) : "nunca";
       const expNudge = sessionsTotal >= 3 && (expAge === null || expAge > 14);
+      const ago = (t) => { if (!t) return "nunca"; const m = Math.round((Date.now() - t) / 60000); return m < 1 ? "ahora mismo" : m < 60 ? `hace ${m} min` : m < 1440 ? `hace ${Math.round(m / 60)} h` : `hace ${Math.round(m / 1440)} días`; };
+      const cloudCard = Nube.on
+        ? `<div class="rounded-2xl border ${Nube.error ? "border-amber-400/30" : "border-emerald-400/25"} bg-zinc-900/40 p-6 space-y-3">
+            <div class="flex flex-wrap items-baseline justify-between gap-2">
+              <h2 class="text-sm font-semibold text-zinc-200">☁ Guardado automático</h2>
+              <span class="text-xs ${Nube.error ? "text-amber-300" : "text-emerald-300"}">${Nube.error ? Util.esc(Nube.error) : `Guardado ${ago(Nube.cfg.lastSyncAt)}`}</span>
+            </div>
+            ${Nube.conflict ? `<div role="alert" class="rounded-xl border border-amber-400/40 bg-amber-400/10 p-4 text-sm text-amber-100 space-y-2">
+                <p>Has practicado en <strong>dos dispositivos</strong> sin que se sincronizaran. ¿Con qué progreso te quedas?</p>
+                <p class="text-xs text-amber-200/80">Nube: ${Util.plural((Nube.conflict.state.sessions || []).length, "sesión", "sesiones")} · Este dispositivo: ${Util.plural(Store.state.sessions.length, "sesión", "sesiones")}</p>
+                <div class="flex flex-wrap gap-3"><button data-action="cloud-use-remote" class="rounded-lg bg-amber-400 px-3 py-1.5 text-xs font-semibold text-zinc-950">Usar el de la nube</button>
+                <button data-action="cloud-use-local" class="rounded-lg border border-amber-400/50 px-3 py-1.5 text-xs font-semibold text-amber-100">Usar el de este dispositivo</button></div></div>` : ""}
+            <p class="text-xs text-zinc-400 leading-relaxed">Tu progreso se guarda solo en tu cuenta de GitHub. El tutor del ordenador lo lee solo y lo que prepara para ti aparece aquí al abrir la app. No tienes que exportar nada.</p>
+            <div class="flex flex-wrap gap-4 text-xs"><button data-action="cloud-sync" class="text-zinc-300 hover:text-white">⟳ Sincronizar ahora</button>
+            <button data-action="cloud-off" class="text-zinc-500 hover:text-rose-300">Desconectar este dispositivo</button></div>
+          </div>`
+        : `<div class="rounded-2xl border border-sky-400/30 bg-zinc-900/40 p-6 space-y-3">
+            <h2 class="text-sm font-semibold text-zinc-200">☁ Activa el guardado automático <span class="font-normal text-zinc-500">· una sola vez</span></h2>
+            <p class="text-xs text-zinc-400 leading-relaxed">Así tu progreso se guarda solo en tu cuenta de GitHub y el tutor del ordenador lo ve sin que exportes nada.</p>
+            <ol class="text-sm text-zinc-300 space-y-1.5 list-decimal list-inside">
+              <li><a href="${Nube.TOKEN_URL}" target="_blank" rel="noopener" class="text-sky-300 underline underline-offset-2">Abre esta página de GitHub</a> (inicia sesión si te lo pide).</li>
+              <li>En «Expiration» elige <strong>No expiration</strong>. Baja hasta abajo y pulsa <strong>Generate token</strong>.</li>
+              <li>Copia la llave que aparece (empieza por <code class="font-mono text-xs">ghp_</code>), vuelve aquí, pégala y pulsa Conectar.</li>
+            </ol>
+            <div class="flex flex-wrap gap-2"><input id="cloud-token" type="password" autocomplete="off" spellcheck="false" placeholder="Pega aquí tu llave (ghp_…)" class="min-w-0 flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-sky-400/40">
+            <button data-action="cloud-connect" class="rounded-lg bg-sky-300 px-4 py-2 text-xs font-semibold text-zinc-950 hover:bg-sky-200">Conectar</button></div>
+            <p id="cloud-msg" class="text-xs text-zinc-500">La llave solo permite guardar notas privadas en tu GitHub, y se queda en este dispositivo.</p>
+          </div>`;
       const backupCard = `<div class="rounded-2xl border ${expNudge ? "border-amber-400/30" : "border-zinc-800"} bg-zinc-900/40 p-6">
           <div class="flex flex-wrap items-baseline justify-between gap-2">
             <h2 class="text-sm font-semibold text-zinc-200">Copia de seguridad</h2>
@@ -1201,7 +1348,7 @@
           </div>
           ${Sync.on ? `<p class="mt-1.5 text-xs text-emerald-300/90 leading-relaxed">⟳ Sincronización automática con la carpeta <code class="font-mono">progreso/</code> activa: /fluidez-activa ve tus errores y retos, y lo que generan las skills entra solo en la app.</p>` : ""}
           ${Sync.note ? `<p class="mt-1.5 text-xs text-emerald-200">${Util.esc(Sync.note)}</p>` : ""}
-          <p class="mt-1.5 text-xs text-zinc-300 leading-relaxed"><strong>Para usar el tutor del ordenador:</strong> pulsa «Exportar copia» → <em>Guardar en Archivos</em> → OneDrive → carpeta <strong>English20</strong>. Lo que el tutor prepare para ti aparecerá en esa misma carpeta: impórtalo con «Importar copia».</p>
+          ${Nube.on ? "" : `<p class="mt-1.5 text-xs text-zinc-300 leading-relaxed"><strong>Sin guardado automático, para usar el tutor del ordenador:</strong> pulsa «Exportar copia» → <em>Guardar en Archivos</em> → OneDrive → carpeta <strong>English20</strong>. Lo que el tutor prepare para ti aparecerá en esa misma carpeta: impórtalo con «Importar copia».</p>`}
           <p class="mt-1.5 text-xs text-zinc-400 leading-relaxed">Tu progreso y tu banco de palabras solo se guardan en este navegador. Exporta un archivo de vez en cuando (Safari puede borrar los datos de webs que no abres en 7 días) o para pasarlos a otro dispositivo.${Sync.on ? "" : " Con <code class=\"font-mono\">npm start</code> la app se sincroniza sola con Claude Code."}</p>
           <div class="mt-4 flex flex-wrap gap-3">
             <button data-action="export" class="rounded-lg bg-zinc-100 px-4 py-2 text-xs font-semibold text-zinc-900 hover:bg-white transition">Exportar copia (.json)</button>
@@ -1238,6 +1385,8 @@
           </div>
           ${dueWords ? `<p class="mt-3 text-xs text-amber-300/90">${Util.plural(dueWords, "palabra", "palabras")} de tu banco ${dueWords === 1 ? "pendiente" : "pendientes"} de repaso.</p>` : ""}
         </div>
+
+        ${Nube.on ? "" : cloudCard}
 
         ${c1Hint}
 
@@ -1292,6 +1441,8 @@
           <h2 class="text-sm font-semibold text-zinc-200 mb-3">Refuerzo por bloque <span class="font-normal text-zinc-500">· no cuenta para la racha</span></h2>
           <div class="grid gap-3 sm:grid-cols-3">${drillBtns}</div>
         </div>
+
+        ${Nube.on ? cloudCard : ""}
 
         ${backupCard}
 
@@ -1987,6 +2138,7 @@
 
     init() {
       Store.load();
+      Nube.load();
       Store.requestPersist();
       Speech.init();
       this.bind();
@@ -1994,6 +2146,7 @@
       Views.render();
       this.registerSW();
       Sync.init();
+      Nube.sync();
     },
 
     /* ---- Copia de seguridad ---- */
@@ -2114,6 +2267,19 @@
           case "abort-no": Views.hideExitAsk(); break;
           case "home": Session.s = null; Session.clearSnapshot(); this.go("home"); break;
           case "export": this.exportProgress(); break;
+          case "cloud-connect": {
+            const inp = document.getElementById("cloud-token"), msg = document.getElementById("cloud-msg");
+            if (msg) { msg.className = "text-xs text-zinc-400"; msg.textContent = "Conectando…"; }
+            Nube.connect(inp ? inp.value : "").then(() => this.go("home")).catch((err) => {
+              const m = document.getElementById("cloud-msg");
+              if (m) { m.className = "text-xs text-rose-300"; m.textContent = err.message || "No se pudo conectar."; }
+            });
+            break;
+          }
+          case "cloud-sync": Nube.sync(); break;
+          case "cloud-off": Nube.disconnect(); this.go("home"); break;
+          case "cloud-use-remote": Nube.resolve(true); break;
+          case "cloud-use-local": Nube.resolve(false); break;
           case "import": { const f = document.getElementById("import-file"); if (f) { f.value = ""; f.click(); } break; }
           case "import-yes":
             if (this.pendingImport) {
@@ -2174,6 +2340,7 @@
 
       // Reloj en pausa con la pestaña oculta; la sesión se guarda al salir o recargar.
       document.addEventListener("visibilitychange", () => {
+        if (document.hidden) Nube.push(true); else if (this.view === "home") Nube.sync();
         if (this.view !== "session" || !Session.s) return;
         if (document.hidden) Session.pause(); else Session.resume();
       });

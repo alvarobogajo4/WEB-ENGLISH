@@ -210,3 +210,29 @@ test("puente OneDrive: en modo prueba (FLUIDEZ_DIR sin E20_BRIDGE_DIR) nunca toc
   try { assert.equal(require("../scripts/onedrive.js").bridgeDir(), null); }
   finally { if (prev.F === undefined) delete process.env.FLUIDEZ_DIR; else process.env.FLUIDEZ_DIR = prev.F; if (prev.B !== undefined) process.env.E20_BRIDGE_DIR = prev.B; }
 });
+
+/* -------------------------------------------------------- Nube (gist secreto) */
+test("Cloud.decide: usa la nube si es más nueva y aquí no hay cambios; pregunta si cambiaron los dos", () => {
+  const { Cloud } = require("../js/core.js");
+  const t = (iso) => Date.parse(iso);
+  const remote = { exportedAt: "2026-11-13T10:00:00Z", device: "pc" };
+  assert.equal(Cloud.decide({ remote: null, device: "ip" }), "push", "sin nube: subir");
+  assert.equal(Cloud.decide({ remote: { ...remote, device: "ip" }, device: "ip", lastSyncAt: 0 }), "push", "la nube es mía");
+  assert.equal(Cloud.decide({ remote, device: "ip", lastSyncAt: t("2026-11-13T11:00:00Z") }), "push", "ya la tenía");
+  assert.equal(Cloud.decide({ remote, device: "ip", lastSyncAt: t("2026-11-13T09:00:00Z"), localChangedAt: t("2026-11-13T08:00:00Z") }), "adopt");
+  assert.equal(Cloud.decide({ remote, device: "ip", lastSyncAt: t("2026-11-13T09:00:00Z"), localChangedAt: t("2026-11-13T09:30:00Z") }), "conflict");
+  assert.equal(Cloud.decide({ remote, device: "nuevo", lastSyncAt: 0, localChangedAt: 5, localEmpty: true }), "adopt", "dispositivo nuevo y vacío");
+  assert.ok(Cloud.INBOX_RE.test("banco-para-app-2026-11-13.json") && !Cloud.INBOX_RE.test("estado.json"));
+});
+
+test("nube.js: apagado en modo prueba (nunca toca el GitHub real desde los tests)", () => {
+  const prev = process.env.FLUIDEZ_DIR;
+  process.env.FLUIDEZ_DIR = os.tmpdir(); delete process.env.E20_NUBE;
+  delete require.cache[require.resolve("../scripts/nube.js")];
+  try {
+    const nube = require("../scripts/nube.js");
+    assert.equal(nube.enabled(), false);
+    assert.equal(nube.findGist(), null);
+    assert.equal(nube.upload(__filename), false);
+  } finally { if (prev === undefined) delete process.env.FLUIDEZ_DIR; else process.env.FLUIDEZ_DIR = prev; }
+});

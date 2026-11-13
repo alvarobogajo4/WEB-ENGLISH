@@ -64,6 +64,7 @@ scripts/validate.js Validador del contenido (base y lotes, enlazados en index.ht
 scripts/runway.js   Días de contenido nuevo que quedan en cada pool (npm run runway)
 scripts/serve.js    Servidor local con sincronización automática con progreso/ (npm start)
 scripts/onedrive.js Carpeta puente con el iPhone: OneDrive/English20
+scripts/nube.js     Guardado en la nube (gist secreto) desde el ordenador, con gh
 scripts/fluidez.js  Progreso de la skill /fluidez-activa (estado · registrar · banco)
 scripts/nivel.js    Chequeos de nivel de /chequeo-nivel (estado · metricas · registrar)
 .claude/skills/     Skills fluidez-activa (tutor), chequeo-nivel (nivel de expresión) y generar-contenido (lotes)
@@ -112,6 +113,18 @@ El objetivo no es aprobar un examen, sino **expresarte con cualquier persona y e
 - **El foco cierra el círculo:** el criterio y la situación más débiles del último chequeo pasan a ser el foco de `/fluidez-activa`, que les dedica una ronda y orienta la elección de tema.
 - **En la app:** la tarjeta «Tu nivel de expresión» muestra tu nivel, tu posición en la escala con el objetivo (B2+), la evolución, los criterios, el mapa de situaciones, los puntos fuertes y débiles con su acción, y los indicadores. Importa `progreso/nivel-para-app-AAAA-MM-DD.json`: se añade y no reemplaza nada.
 - **Límites:** es una estimación con margen de ± medio nivel, no un certificado. La pronunciación no se evalúa, porque el dictado la convierte en texto.
+
+## Guardado automático en la nube (recomendado)
+
+Una sola vez, en la app del iPhone: tarjeta **«Activa el guardado automático»** → abre la página de GitHub → Expiration: *No expiration* → **Generate token** → copia la llave (`ghp_…`), pégala en la app y pulsa **Conectar**.
+
+A partir de ahí todo es automático:
+- Cada respuesta se guarda en un **gist secreto** de tu cuenta de GitHub (`estado.json`). La llave solo da permiso sobre gists y se queda en el dispositivo: nunca va en las copias exportadas.
+- El tutor del ordenador (`/fluidez-activa`, `/chequeo-nivel`) lee esa copia con la sesión de GitHub del ordenador (`gh`) y sube ahí lo que prepara para ti. La app lo **añade sola** al abrirse.
+- Si practicas en otro dispositivo, al abrir la app se usa lo más reciente. Si has practicado en los dos sin conexión, la app te pregunta con cuál te quedas.
+- Privacidad: el gist no aparece en tu perfil ni en buscadores, pero cualquiera que tenga su enlace podría leerlo. No dictes datos de la empresa.
+
+Si no activas la nube, sigue funcionando el puente manual con OneDrive (abajo).
 
 ## En el iPhone (uso diario) y el puente con el ordenador
 

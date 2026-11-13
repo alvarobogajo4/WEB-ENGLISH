@@ -763,6 +763,25 @@
     }
   };
 
+  /* ----------------------------------------------------------------- Cloud */
+  /* Guardado automático en la nube (un gist secreto de GitHub del alumno).
+   * decide(): qué hacer al abrir la app con la copia de la nube delante.
+   *   "adopt"    → la nube es más nueva (otro dispositivo) y aquí no hay cambios sin subir: usarla
+   *   "conflict" → los dos dispositivos han cambiado desde la última sincronización: preguntar
+   *   "push"     → lo de este dispositivo es lo bueno: subirlo */
+  const Cloud = {
+    DESCRIPTION: "english20-datos · progreso de English 20 Minutes (no borrar)",
+    STATE_FILE: "estado.json",
+    INBOX_RE: /^(banco|nivel)-para-app-\d{4}-\d{2}-\d{2}\.json$/,
+    decide({ remote, device, lastSyncAt = 0, localChangedAt = 0, localEmpty = false }) {
+      if (!remote || !remote.exportedAt) return "push";
+      const remoteAt = Date.parse(remote.exportedAt) || 0;
+      if (remote.device === device || remoteAt <= lastSyncAt) return "push";
+      if (localEmpty || localChangedAt <= lastSyncAt) return "adopt";
+      return "conflict";
+    }
+  };
+
   /* ---------------------------------------------------------------- Hedges */
   /* Muletillas y atenuadores que restan autoridad en un registro profesional.
    * "Sorry" funcional ("Sorry to jump in", "Sorry, could you…") NO cuenta:
@@ -788,7 +807,7 @@
       .filter((h) => h.n);
   }
 
-  const Core = { Util, SRS, Errors, Mastery, Level, Streak, State, Bank, Nivel, Produce, Dictation, HEDGES, countHedges };
+  const Core = { Util, SRS, Errors, Mastery, Level, Streak, State, Bank, Nivel, Produce, Dictation, Cloud, HEDGES, countHedges };
   root.E20_CORE = Core;
   if (typeof module !== "undefined" && module.exports) module.exports = Core;
 })(typeof window !== "undefined" ? window : globalThis);

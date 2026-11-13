@@ -8,7 +8,7 @@
  *   no recibe HTML a cambio.
  * Sube CACHE_VERSION si cambias la lista de ASSETS.
  */
-const CACHE_VERSION = "e20-c1-v11";
+const CACHE_VERSION = "e20-c1-v12";
 const ASSETS = ["./", "./index.html", "./js/core.js", "./js/app.js", "./js/data_c1.js", "./js/content/lote-02.js", "./js/content/lote-03.js", "./manifest.json", "./icons/icon.svg", "./icons/icon-192.png", "./icons/icon-512.png", "./icons/apple-touch-icon.png"];
 const NET_TIMEOUT_MS = 3000;
 
