@@ -310,10 +310,11 @@
   const str = (v, max = 300) => (typeof v === "string" ? v.slice(0, max) : "");
 
   const State = {
-    VERSION: 4,
+    VERSION: 5,
+    VOICES: ["en-GB", "en-US", "en-AU"],
     fresh() {
       return {
-        version: 4,
+        version: 5,
         streak: { current: 0, best: 0, lastDate: null },
         items: {},       // id → registro SM-2 (ver SRS)
         errors: {},      // patrón → registro de errores (ver Errors)
@@ -322,7 +323,8 @@
         nivel: [],       // chequeos de expresión (ver Nivel), del más antiguo al más reciente
         fluidez: null,   // último resumen de /fluidez-activa (ver Bank.summary)
         delivery: [],    // métricas de los retos hablados: { date, secs, words, wpm, fillers, authority, social }
-        settings: { tts: true, voice: "en-GB", level: "b2", lastExport: null }
+        productions: [], // texto de los últimos retos (para el feedback del tutor): ver normalizeProduction
+        settings: { tts: true, voice: "en-GB", level: "b2", lastExport: null, produceFirst: true, synced: [] }
       };
     },
 
@@ -346,6 +348,31 @@
     normalizeDelivery(d) {
       if (!isDate(d.date)) return null;
       return { date: d.date, secs: nonNeg(d.secs), words: nonNeg(d.words), wpm: nonNeg(d.wpm), fillers: nonNeg(d.fillers), authority: nonNeg(d.authority), social: !!d.social };
+    },
+
+    MAX_PRODUCTIONS: 30,
+    /* Respuesta a un reto: { date, id, scenario, brief, text, spoken, secs, wpm, score, social, reviewed } */
+    normalizeProduction(p) {
+      if (!isObj(p) || !isDate(p.date) || typeof p.text !== "string" || !p.text.trim()) return null;
+      return {
+        date: p.date, id: str(p.id, 40), scenario: str(p.scenario, 60), brief: str(p.brief, 400),
+        text: str(p.text, 2000), spoken: !!p.spoken, secs: nonNeg(p.secs), wpm: nonNeg(p.wpm),
+        score: Math.min(100, nonNeg(p.score)), social: !!p.social, reviewed: !!p.reviewed
+      };
+    },
+
+    /* Ajustes válidos: un valor desconocido (p. ej. de una copia manipulada) vuelve al valor por defecto. */
+    normalizeSettings(s) {
+      const base = State.fresh().settings;
+      if (!isObj(s)) return base;
+      return {
+        tts: typeof s.tts === "boolean" ? s.tts : base.tts,
+        voice: State.VOICES.includes(s.voice) ? s.voice : base.voice,
+        level: s.level === "b2" || s.level === "c1" ? s.level : base.level,
+        lastExport: isDate(s.lastExport) ? s.lastExport : null,
+        produceFirst: typeof s.produceFirst === "boolean" ? s.produceFirst : base.produceFirst,
+        synced: Array.isArray(s.synced) ? s.synced.filter((x) => typeof x === "string").slice(-100) : []
+      };
     },
 
     normalizeError(p) {
@@ -379,17 +406,18 @@
       const st = isObj(parsed.streak) ? parsed.streak : {};
       return {
         ...base,
-        version: 4,
+        version: 5,
         errors,
         nivel: Array.isArray(parsed.nivel) ? Nivel.merge([], parsed.nivel.map(Nivel.tryNormalize).filter(Boolean)) : [],
         fluidez: Bank.summary(parsed.fluidez),
         delivery: Array.isArray(parsed.delivery) ? parsed.delivery.filter(isObj).map(State.normalizeDelivery).filter(Boolean).slice(-State.MAX_DELIVERY) : [],
+        productions: Array.isArray(parsed.productions) ? parsed.productions.map(State.normalizeProduction).filter(Boolean).slice(-State.MAX_PRODUCTIONS) : [],
         streak: {
           current: Math.max(0, Number(st.current) || 0),
           best: Math.max(0, Number(st.best) || 0),
           lastDate: typeof st.lastDate === "string" && DATE_RE.test(st.lastDate) ? st.lastDate : null
         },
-        settings: { ...base.settings, ...(isObj(parsed.settings) ? parsed.settings : {}) },
+        settings: State.normalizeSettings(parsed.settings),
         items,
         sessions: Array.isArray(parsed.sessions) ? parsed.sessions.filter((s) => isObj(s) && isObj(s.score)) : [],
         custom: Array.isArray(parsed.custom)
@@ -667,6 +695,72 @@
     }
   };
 
+  /* --------------------------------------------------------------- Produce */
+  /* «Dilo antes de verlo»: el alumno produce la frase (hablando o escribiendo)
+   * ANTES de ver las opciones. Pasar de reconocer a producir es el salto que
+   * convierte el vocabulario pasivo en activo (efecto de recuperación activa).
+   * similarity: qué parte de las palabras de la frase modelo aparece en el intento
+   * (0–1), sin mayúsculas, puntuación ni contracciones; las palabras vacías
+   * cuentan la mitad, porque lo que importa es dar con el chunk. */
+  const STOP = new Set("a an the to of in on at for and or but is are was were be it i you we they he she that this so do does did have has had my your our with as just".split(" "));
+  const normTokens = (s) => String(s).toLowerCase()
+    .replace(/[’‘]/g, "'")
+    .replace(/n't\b/g, " not").replace(/'re\b/g, " are").replace(/'m\b/g, " am").replace(/'ll\b/g, " will").replace(/'ve\b/g, " have").replace(/'d\b/g, " would").replace(/'s\b/g, "")
+    .replace(/[^a-z0-9\s-]/g, " ").split(/\s+/).filter(Boolean);
+  const Produce = {
+    tokens: normTokens,
+    similarity(attempt, target) {
+      const tgt = normTokens(target), have = new Set(normTokens(attempt));
+      if (!tgt.length || !have.size) return 0;
+      let got = 0, tot = 0;
+      for (const w of tgt) { const wt = STOP.has(w) ? 0.5 : 1; tot += wt; if (have.has(w)) got += wt; }
+      return Math.round((got / tot) * 100) / 100;
+    },
+    /* Calidad SM-2 combinando producción y reconocimiento:
+     *   elige mal → 1 · no intenta producir → 4 (solo reconocimiento)
+     *   produce ≥ 75 % → 5 · ≥ 45 % → 4 · menos → 3 (lo reconoce pero aún no le sale: vuelve antes) */
+    quality(choiceOk, attempt, target) {
+      if (!choiceOk) return 1;
+      if (!String(attempt || "").trim()) return 4;
+      const s = Produce.similarity(attempt, target);
+      return s >= 0.75 ? 5 : s >= 0.45 ? 4 : 3;
+    }
+  };
+
+  /* ------------------------------------------------------------- Dictation */
+  /* Repaso de un audio ya escuchado: en lugar de repetir las mismas preguntas
+   * (que acaban memorizándose), se escucha una frase y se escriben las palabras
+   * que faltan. Entrena la decodificación de abajo arriba: separar palabras en
+   * el habla encadenada, que es donde falla la comprensión de un B2. */
+  const Dictation = {
+    GAPS: 3,
+    pick(lines, rnd = Math.random) {
+      const cands = lines.map((l, i) => ({ i, words: l.text.split(/\s+/) })).filter((x) => x.words.length >= 8);
+      const pool = cands.length ? cands : lines.map((l, i) => ({ i, words: l.text.split(/\s+/) }));
+      const line = pool[Math.floor(rnd() * pool.length)];
+      const clean = (w) => w.replace(/^[^A-Za-z0-9']+|[^A-Za-z0-9']+$/g, "");
+      const content = line.words.map((w, i) => ({ i, w: clean(w) }))
+        .filter((x) => x.w.length >= 4 && !STOP.has(x.w.toLowerCase()));
+      const chosen = Util.shuffle(content, rnd).slice(0, Dictation.GAPS).sort((a, b) => a.i - b.i);
+      return { line: line.i, gaps: chosen.map((x) => ({ pos: x.i, word: x.w })) };
+    },
+    /* Acepta mayúsculas/puntuación distintas y una errata en palabras de 6+ letras. */
+    check(given, expected) {
+      const n = (s) => String(s).toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9']/g, "");
+      const a = n(given), b = n(expected);
+      if (!a) return false;
+      if (a === b) return true;
+      return b.length >= 6 && Dictation.distance(a, b) <= 1;
+    },
+    distance(a, b) {
+      const dp = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+      for (let j = 1; j <= b.length; j++) dp[0][j] = j;
+      for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++)
+        dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      return dp[a.length][b.length];
+    }
+  };
+
   /* ---------------------------------------------------------------- Hedges */
   /* Muletillas y atenuadores que restan autoridad en un registro profesional.
    * "Sorry" funcional ("Sorry to jump in", "Sorry, could you…") NO cuenta:
@@ -692,7 +786,7 @@
       .filter((h) => h.n);
   }
 
-  const Core = { Util, SRS, Errors, Mastery, Level, Streak, State, Bank, Nivel, HEDGES, countHedges };
+  const Core = { Util, SRS, Errors, Mastery, Level, Streak, State, Bank, Nivel, Produce, Dictation, HEDGES, countHedges };
   root.E20_CORE = Core;
   if (typeof module !== "undefined" && module.exports) module.exports = Core;
 })(typeof window !== "undefined" ? window : globalThis);

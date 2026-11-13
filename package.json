@@ -3,9 +3,11 @@
   "private": true,
   "description": "PWA de 20 minutos diarios de inglés profesional y conversacional.",
   "scripts": {
+    "start": "node scripts/serve.js",
     "test": "node --test \"tests/**/*.test.js\"",
     "validate": "node scripts/validate.js",
     "check": "node scripts/validate.js && node --test \"tests/**/*.test.js\"",
+    "runway": "node scripts/runway.js",
     "serve": "python -m http.server 8080",
     "fluidez": "node scripts/fluidez.js estado"
   },

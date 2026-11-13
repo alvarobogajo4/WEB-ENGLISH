@@ -1,20 +1,33 @@
 #!/usr/bin/env node
-/* Valida js/data_c1.js contra las reglas de contenido.
+/* Valida el contenido (js/data_c1.js + lotes de js/content/) contra las reglas.
  * Uso: npm run validate   → sale con código 1 si hay errores (los avisos no fallan).
+ * Los lotes se cargan en el orden de index.html, igual que en el navegador, y se
+ * comprueba que cada archivo de js/content/ esté enlazado en index.html y en sw.js.
  */
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { countHedges } = require("../js/core.js");
 
-const file = path.join(__dirname, "..", "js", "data_c1.js");
-const sandbox = { window: {} };
-vm.runInNewContext(fs.readFileSync(file, "utf8"), sandbox, { filename: file });
-const D = sandbox.window.E20_DATA;
-
+const ROOT = path.join(__dirname, "..");
 const errors = [], warnings = [];
 const err = (id, msg) => errors.push(`${id}: ${msg}`);
 const warn = (id, msg) => warnings.push(`${id}: ${msg}`);
+
+const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
+const sw = fs.readFileSync(path.join(ROOT, "sw.js"), "utf8");
+const scripts = [...html.matchAll(/<script src="\.\/(js\/(?:data_c1|content\/[^"]+)\.js)"><\/script>/g)].map((m) => m[1]);
+const lotes = fs.existsSync(path.join(ROOT, "js", "content")) ? fs.readdirSync(path.join(ROOT, "js", "content")).filter((n) => n.endsWith(".js")).map((n) => `js/content/${n}`) : [];
+for (const l of lotes) {
+  if (!scripts.includes(l)) err(l, "lote sin <script> en index.html (la app no lo cargaría)");
+  if (!sw.includes(`"./${l}"`)) err(l, "lote sin precachear en sw.js (no funcionaría offline): añádelo a ASSETS y sube CACHE_VERSION");
+}
+const sandbox = { window: {} };
+for (const f of scripts) {
+  try { vm.runInNewContext(fs.readFileSync(path.join(ROOT, f), "utf8"), sandbox, { filename: f }); }
+  catch (e) { err(f, `no se pudo cargar: ${e.message}`); }
+}
+const D = sandbox.window.E20_DATA;
 const isStr = (v) => typeof v === "string" && v.trim().length > 0;
 const LEVELS = ["b2", "c1"];
 
@@ -105,6 +118,8 @@ for (const it of D.BLOCKS.listening || []) {
     if (!Number.isInteger(q.answer) || q.answer < 0 || q.answer >= (q.options || []).length) err(it.id, `P${i + 1}: answer fuera de rango`);
   });
   for (const g of it.glossary || []) if (!isStr(g.t) || !isStr(g.es)) err(it.id, "entrada de glosario incompleta");
+  // El repaso de un audio es un dictado: necesita al menos una frase de 8+ palabras.
+  if ((it.lines || []).every((l) => String(l.text).split(/\s+/).length < 8)) warn(it.id, "ninguna línea tiene 8+ palabras: el dictado de repaso será pobre");
 }
 
 for (const it of D.BLOCKS.challenges || []) {
@@ -125,7 +140,7 @@ for (const it of D.BLOCKS.challenges || []) {
 /* ---- Informe ---- */
 const total = Object.values(D.BLOCKS).reduce((n, l) => n + l.length, 0);
 const byPool = Object.entries(D.BLOCKS).map(([p, l]) => `${p} ${l.length}`).join(" · ");
-console.log(`Contenido: ${total} ítems (${byPool})`);
+console.log(`Contenido: ${total} ítems (${byPool})${D.batches && D.batches.length ? ` · lotes: ${D.batches.join(", ")}` : ""}`);
 for (const w of warnings) console.log(`  aviso  ${w}`);
 for (const e of errors) console.log(`  ERROR  ${e}`);
 console.log(errors.length ? `\n✗ ${errors.length} errores, ${warnings.length} avisos` : `\n✓ Sin errores (${warnings.length} avisos)`);

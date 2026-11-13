@@ -94,7 +94,7 @@ En español, un máximo de 20 líneas:
 4. **Puntos débiles**: 2, con su cita y su acción.
 5. **Ahora sí, feedback de lengua:** 3 correcciones útiles de sus respuestas, en el formato *dijo → mejor*.
 6. **Foco hasta el próximo chequeo** (criterio y situación). `/fluidez-activa` lo usará automáticamente.
-7. Pídele que importe en la app `progreso/nivel-para-app-AAAA-MM-DD.json` (Panel → Copia de seguridad → Importar copia) para ver la tarjeta «Tu nivel de expresión».
+7. Si abre la app con `npm start`, la tarjeta «Tu nivel de expresión» se actualiza sola. Si no, que importe `progreso/nivel-para-app-AAAA-MM-DD.json` (Panel → Copia de seguridad → Importar copia).
 8. Recuérdale que el próximo chequeo será dentro de unas 4 semanas. Antes, el cambio sería ruido.
 
 ## Límites que debes decir si sale el tema

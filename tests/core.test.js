@@ -305,7 +305,7 @@ test("normalize descarta piezas dañadas sin perder las buenas", () => {
   assert.deepEqual(s.streak, { current: 4, best: 6, lastDate: "2026-11-10" });
   assert.equal(s.settings.level, "c1");
   assert.equal(s.settings.tts, true); // valor por defecto conservado
-  assert.equal(s.version, 4);
+  assert.equal(s.version, 5);
 });
 
 test("normalize migra el progreso de la versión 2 (cajas Leitner) sin perderlo", () => {
@@ -439,7 +439,7 @@ test("nivel: el archivo de nivel se reconoce, y el estado v4 lo guarda junto al 
   assert.equal(r.kind, "nivel");
   assert.equal(r.entries[0].global.nivel, "B2");
   const st = State.normalize({ version: 3, nivel: [chequeo("2026-11-12", "B2"), { basura: 1 }], delivery: [{ date: "2026-11-12", wpm: 120, secs: 60, words: 120 }, { date: "x" }] });
-  assert.equal(st.version, 4);
+  assert.equal(st.version, 5);
   assert.equal(st.nivel.length, 1);
   assert.equal(st.delivery.length, 1);
   assert.equal(st.delivery[0].social, false);

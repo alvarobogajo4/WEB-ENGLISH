@@ -2324,3 +2324,16 @@ window.E20_DATA = {
     ]
   }
 };
+
+/* Lotes de contenido (js/content/lote-NN.js): cada lote AÑADE ítems al final de
+ * sus pools con E20_DATA.addBatch("lote-NN", { pool: [ítems] }). Así el contenido
+ * crece por lotes revisables sin tocar este archivo. Los lotes se cargan en
+ * index.html y se precachean en sw.js (el validador comprueba las dos cosas). */
+window.E20_DATA.batches = [];
+window.E20_DATA.addBatch = function (name, pools) {
+  for (const [pool, items] of Object.entries(pools)) {
+    if (!this.BLOCKS[pool]) throw new Error(`${name}: pool desconocido "${pool}"`);
+    this.BLOCKS[pool].push(...items);
+  }
+  this.batches.push(name);
+};

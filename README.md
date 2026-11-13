@@ -8,9 +8,9 @@ Objetivo práctico: **conversar con naturalidad** (small talk, contar historias,
 
 | Bloque | Min | Qué entrenas | Contenido |
 |---|---|---|---|
-| **1 · Vocabulario & Conversación** | 01–05 | Small talk, reaccionar, contar historias y cambiar de tema. Frases para intervenir, aclarar o discrepar en reuniones. Vocabulario amplio y de HR Analytics | 30 frases de conversación, 24 de reunión, 40 de vocabulario amplio (phrasal verbs, expresiones, colocaciones), 24 términos de HR, 60 expresiones C1 y **tu banco personal** |
-| **2 · Gramática en contexto** | 06–10 | Para hablar de datos (present perfect, condicionales, pasiva…) y para conversar y contar historias (used to, tiempos narrativos, wish, question tags…) | 41 frases con la regla en una línea, más 40 trampas del español (trabajo y vida diaria) |
-| **3 · Comprensión auditiva** | 11–15 | Entender a Mark (jefe, 🇦🇺), Sarah (🇬🇧) y Jake (🇺🇸) en reuniones, llamadas y charlas informales | 18 audios con 3 preguntas, transcripción y glosario (*arvo, reckon, yeah nah, snowed under…*) |
+| **1 · Vocabulario & Conversación** | 01–05 | Small talk, reaccionar, contar historias y cambiar de tema. Frases para intervenir, aclarar o discrepar en reuniones. Vocabulario amplio y de HR Analytics | 36 frases de conversación, 30 de reunión, 40 de vocabulario amplio (phrasal verbs, expresiones, colocaciones), 24 términos de HR, 60 expresiones C1 y **tu banco personal**. En las frases de conversación y reunión, **primero la dices tú** y después ves las opciones |
+| **2 · Gramática en contexto** | 06–10 | Para hablar de datos (present perfect, condicionales, pasiva…) y para conversar y contar historias (used to, tiempos narrativos, wish, question tags…) | 56 frases con la regla en una línea, más 46 trampas del español (trabajo y vida diaria) |
+| **3 · Comprensión auditiva** | 11–15 | Entender a Mark (jefe, 🇦🇺), Sarah (🇬🇧) y Jake (🇺🇸) en reuniones, llamadas y charlas informales | 24 audios con 3 preguntas, transcripción y glosario (*arvo, reckon, yeah nah, snowed under…*). Al repasar un audio ya conocido, **dictado con huecos** |
 | **4 · Producción hablada** | 16–20 | Responder en voz alta como en la situación real | 23 retos: 1:1 con tu jefe, defender un dato, pedir entrar en un proyecto, presentar… y también contar tu fin de semana, una anécdota, explicar tu cultura u opinar en una cena |
 
 Cada bloque tiene un reloj de referencia de 5 minutos. Si se acaba el tiempo, el bloque no se corta: el reloj pasa a ámbar y sigue contando.
@@ -25,6 +25,10 @@ La dificultad se adapta: la app te propone subir a C1 cuando superas el 85 % en 
 
 ## Funcionalidades
 
+- **Dilo antes de verlo:** en las frases de reunión y conversación (y en el registro C1) primero produces la frase, hablando o escribiendo, y luego eliges entre las opciones. Recuperar algo de memoria fija mucho más que reconocerlo, y es justo el paso de vocabulario pasivo a activo. La nota SM-2 combina las dos cosas: si eliges bien pero tu versión se parece poco a la buena, el ítem vuelve antes. Se puede desactivar en el panel.
+- **Dictado de repaso en el listening:** los audios que ya conoces no repiten las mismas preguntas (se acabarían memorizando). Escuchas una frase y escribes las 3 palabras que faltan. Entrena el oído fino: separar palabras en el habla encadenada.
+- **Tarjetas del banco con micro:** dices la expresión en voz alta y la app compara tu versión con la buena.
+- **Tus retos llegan al tutor:** el texto de cada reto (dictado o escrito) se guarda y `/fluidez-activa` lo usa para darte feedback sobre lo que de verdad dijiste.
 - **Repetición espaciada SM-2** (el algoritmo de SuperMemo, adaptado de [m98/fluent](https://github.com/m98/fluent), licencia MIT): cada respuesta recibe una nota de 0 a 5 y cada ítem tiene su propio factor de facilidad. Los aciertos alejan el repaso (1, 6, 15, 38 días… hasta 180) y un fallo lo devuelve al principio para ese mismo día. Las tarjetas de tu banco se autoevalúan con tres botones (*No lo sabía* / *Con dudas* / *Lo sabía*, también con las teclas `1`–`3`): *Con dudas* cuenta como acierto, pero el repaso vuelve antes. Acertar antes de tiempo cuenta en tu historial pero no adelanta el calendario. El progreso de la versión anterior (cajas Leitner) se migra automáticamente.
 - **Errores recurrentes:** cada ítem pertenece a un patrón (una regla de gramática, un tipo de trampa del español, una función de conversación, un tipo de vocabulario o un hablante del listening). La app guarda tus fallos con *tu respuesta → la correcta*. Con 2–3 fallos en 30 días el patrón es **emergente** y con 4 o más, **crítico**. Las sesiones diarias dan prioridad a esos patrones, y el botón **Repasar mis errores** prepara un repaso solo con ellos. Un patrón queda **superado** con 3 aciertos seguidos, el último en un día posterior al último fallo.
 - **Resumen con avances y foco:** al terminar ves qué patrones has superado, cuáles empeoran y los 3 en los que conviene centrarse en la próxima sesión.
@@ -46,18 +50,21 @@ La dificultad se adapta: la app te propone subir a C1 cuando superas el 85 % en 
 ```
 index.html          Shell de la app (Tailwind CDN, tema oscuro)
 js/core.js          Núcleo puro y testeable: Util, SRS (SM-2), Errors, Mastery, Level, racha, estado/importación, muletillas
-js/data_c1.js       Contenido: 300 ítems en 10 pools, más configuración de sesión y niveles
+js/data_c1.js       Contenido base: 300 ítems en 10 pools, más configuración de sesión y niveles
+js/content/         Lotes de contenido (lote-NN.js) que añaden ítems a los pools
 js/app.js           App: Store, Content, Stats, Speech, Voice, Session, Views, App
 manifest.json       Manifest PWA
 sw.js               Service worker (network-first con timeout de 3 s)
 icons/icon.svg      Icono
 tests/              Tests del núcleo (node:test, sin dependencias)
-scripts/validate.js Validador del contenido de data_c1.js
+scripts/validate.js Validador del contenido (base y lotes, enlazados en index.html y sw.js)
+scripts/runway.js   Días de contenido nuevo que quedan en cada pool (npm run runway)
+scripts/serve.js    Servidor local con sincronización automática con progreso/ (npm start)
 scripts/fluidez.js  Progreso de la skill /fluidez-activa (estado · registrar · banco)
 scripts/nivel.js    Chequeos de nivel de /chequeo-nivel (estado · metricas · registrar)
-.claude/skills/     Skills fluidez-activa (tutor) y chequeo-nivel (nivel de expresión)
+.claude/skills/     Skills fluidez-activa (tutor), chequeo-nivel (nivel de expresión) y generar-contenido (lotes)
 progreso/           Tus datos de fluidez activa (personales: fuera de git)
-package.json        Scripts: npm test · npm run validate · npm run check · npm run fluidez
+package.json        Scripts: npm start · npm test · npm run validate · npm run check · npm run runway · npm run fluidez
 ```
 
 Cómo se forma la sesión (`SESSION_MIX` en `data_c1.js`):
@@ -83,8 +90,8 @@ La app entrena sobre todo el **reconocimiento**: eliges entre opciones. Para que
 | Cierre | 1 | Registro automático del progreso y archivo de chunks para la app |
 
 **Cómo se conecta con la app:**
-- **De la app al tutor:** exporta una copia desde el panel y el tutor la encuentra sola (la busca en Descargas, el Escritorio de OneDrive o esta carpeta). De ahí saca tus **errores recurrentes** y las palabras del banco que aún no dominas, y las convierte en producción obligatoria.
-- **Del tutor a la app:** al cerrar, `node scripts/fluidez.js banco` crea `progreso/banco-para-app-AAAA-MM-DD.json`. Si lo importas en la app, esos chunks se **añaden** a tu banco y entran en el repaso diario. Tu progreso no cambia.
+- **De la app al tutor:** con `npm start` es automático (`progreso/app-estado.json`). Sin él, exporta una copia desde el panel y el tutor la encuentra sola (en Descargas, el Escritorio de OneDrive o esta carpeta). De ahí saca tus **errores recurrentes**, las palabras del banco que aún no dominas y **tus últimos retos hablados**: empieza la lección mejorando lo que de verdad dijiste.
+- **Del tutor a la app:** al cerrar, `node scripts/fluidez.js banco` crea `progreso/banco-para-app-AAAA-MM-DD.json`. Con `npm start` la app lo añade sola al abrirse; si no, impórtalo. Esos chunks se **añaden** a tu banco y entran en el repaso diario. Tu progreso no cambia.
 - **El mismo algoritmo:** el progreso de los chunks usa el SM-2 de `js/core.js`. Un chunk es **activo** cuando lo produces bien en 3 repasos espaciados.
 
 Para ver tu estado sin abrir una lección: `npm run fluidez`.
@@ -105,7 +112,8 @@ El objetivo no es aprobar un examen, sino **expresarte con cualquier persona y e
 
 ## Ejecutar
 
-- **Rápido:** doble clic en `index.html`. Funciona todo salvo el modo offline; el dictado depende del navegador.
+- **Recomendado en el ordenador:** `npm start` y abre http://127.0.0.1:8080 (otro puerto: `PORT=8091 npm start`). La app se **sincroniza sola** con la carpeta `progreso/`: guarda su estado en `progreso/app-estado.json`, que lee `/fluidez-activa`, y añade sin que hagas nada los archivos que generan las skills (chunks y chequeos de nivel). Sin exportar ni importar. El servidor solo escucha en tu equipo.
+- **Rápido:** doble clic en `index.html`. Funciona todo salvo el modo offline y la sincronización; el dictado depende del navegador.
 - **Como PWA (instalable y offline):** sírvela por HTTP.
   ```bash
   python -m http.server 8080
@@ -138,16 +146,21 @@ Si no hay voz australiana, Mark suena con otra voz inglesa y la app lo avisa. **
 
 ## Persistencia (`localStorage`)
 
-Clave `e20_c1_v1`. Se mantiene desde la v1, así que el progreso antiguo se conserva:
+Clave `e20_c1_v1`. Se mantiene desde la v1 y cada versión migra la anterior, así que el progreso antiguo se conserva (`State.normalize` en `js/core.js`):
 
 ```js
 {
-  version: 2,
-  streak:   { current, best, lastDate },
-  items:    { "MM-007": { box, seen, correct, lastSeen } },
-  sessions: [{ date, ts, level, score: { vocab: { ok, total }, grammar, listening, challenges } }],
-  custom:   [{ id: "U-…", en, es, example, created }],      // banco personal
-  settings: { tts, voice: "en-GB" | "en-US" | "en-AU", level: "b2" | "c1", lastExport }
+  version: 5,
+  streak:      { current, best, lastDate },
+  items:       { "MM-007": { ef, reps, interval, due, seen, correct, lapses, lastSeen } }, // SM-2
+  errors:      { "g:Present perfect": { label, n, ok, run, last, lastOk, dates, examples } },
+  sessions:    [{ date, ts, level, score: { vocab: { ok, total }, grammar, listening, challenges } }],
+  custom:      [{ id: "U-…", en, es, example, created }],          // banco personal
+  nivel:       [ /* chequeos de /chequeo-nivel */ ],
+  fluidez:     { fecha, activos, enUso, sesiones, espontaneoPct, criterios },
+  delivery:    [{ date, secs, words, wpm, fillers, authority, social }],
+  productions: [{ date, id, scenario, brief, text, spoken, secs, wpm, score, social }], // últimos 30 retos
+  settings:    { tts, voice: "en-GB" | "en-US" | "en-AU", level: "b2" | "c1", lastExport, produceFirst, synced }
 }
 ```
 
@@ -155,7 +168,7 @@ La sesión en curso se guarda aparte, en `sessionStorage` (clave `e20_session`),
 
 ## Añadir contenido
 
-Edita `js/data_c1.js`. Los comentarios de cabecera recogen todas las reglas. Las más importantes:
+El contenido crece **por lotes**: `npm run runway` dice qué pools se quedan sin ítems nuevos en menos de 14 días, y la skill `/generar-contenido` escribe el siguiente `js/content/lote-NN.js` orientado a tus errores reales, lo enlaza en `index.html` y `sw.js` y lo valida. También puedes escribir un lote a mano con el formato de `js/content/lote-02.js`. Las reglas están en la cabecera de `js/data_c1.js`. Las más importantes:
 
 1. Cada ítem necesita un `id` **único y estable**. Añade siempre al final y no renumeres.
 2. Indica `level: "b2"` o `"c1"`. Si falta, se usa `POOL_DEFAULT_LEVEL`.
@@ -168,7 +181,7 @@ Edita `js/data_c1.js`. Los comentarios de cabecera recogen todas las reglas. Las
 
 ## Ideas para siguientes iteraciones
 
-- Feedback de IA sobre la respuesta hablada del bloque 4 (gramática y naturalidad).
-- Modo "shadowing": repetir en voz alta cada línea del audio y comparar con el dictado.
-- Más audios con situaciones reales que tú aportes (reuniones recurrentes, proyectos).
-- Compilar Tailwind (CLI) en lugar del CDN de desarrollo.
+- Shadowing: repetir en voz alta cada línea del audio y comparar con el dictado.
+- Colocaciones de nivel B2: hoy son todas C1, así que en B2 entran directamente las C1.
+- Audios con voz neural pregrabada (mp3) para un acento australiano real en cualquier navegador.
+- Plataforma: compilar Tailwind, fuentes locales, iconos PNG, CSP y despliegue en Pages.

@@ -8,8 +8,8 @@
  *   no recibe HTML a cambio.
  * Sube CACHE_VERSION si cambias la lista de ASSETS.
  */
-const CACHE_VERSION = "e20-c1-v8";
-const ASSETS = ["./", "./index.html", "./js/core.js", "./js/app.js", "./js/data_c1.js", "./manifest.json", "./icons/icon.svg"];
+const CACHE_VERSION = "e20-c1-v9";
+const ASSETS = ["./", "./index.html", "./js/core.js", "./js/app.js", "./js/data_c1.js", "./js/content/lote-02.js", "./manifest.json", "./icons/icon.svg"];
 const NET_TIMEOUT_MS = 3000;
 
 self.addEventListener("install", (e) => {
@@ -71,5 +71,6 @@ self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
   const url = new URL(e.request.url);
   if (url.protocol !== "http:" && url.protocol !== "https:") return;
+  if (url.origin === location.origin && url.pathname.includes("/api/")) return; // sincronización local: nunca desde caché
   e.respondWith(url.origin === location.origin ? networkFirst(e) : staleWhileRevalidate(e));
 });

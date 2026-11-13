@@ -26,6 +26,7 @@
   const ERRORS_PER_BLOCK = 6; // ítems por bloque en el repaso de errores
   const ERROR_BLOCKS = ["vocab", "grammar"]; // bloques rápidos donde se repasan los patrones
   const OPTION_KINDS = ["register", "gap", "move", "trap"];
+  const PRODUCE_KINDS = ["move", "register"]; // ítems con «dilo antes de verlo»
   const POOL_KIND = {
     registerUpgrade: "register", collocations: "gap", hrVocab: "gap", everydayVocab: "gap", grammar: "gap",
     meetingMoves: "move", conversation: "move", traps: "trap", listening: "listen", challenges: "challenge", custom: "card"
@@ -83,6 +84,7 @@
     function save() {
       try { localStorage.setItem(KEY, JSON.stringify(state)); persistent = true; }
       catch (e) { persistent = false; }
+      Sync.schedule();
     }
     function reset() { state = C.State.fresh(); save(); }
     function replace(next) { state = next; recoveredKey = null; save(); }
@@ -98,6 +100,52 @@
       get state() { return state; }, get persistent() { return persistent; }, get recoveredKey() { return recoveredKey; }
     };
   })();
+
+  /* ------------------------------------------------------------------ Sync */
+  /* Con `npm start` (scripts/serve.js) la app se sincroniza sola con progreso/:
+   *   - guarda su estado en progreso/app-estado.json (lo lee /fluidez-activa),
+   *   - añade los archivos que dejan las skills (banco-para-app-*, nivel-para-app-*).
+   * Con doble clic o con otro servidor no hace nada: sigue la copia manual. */
+  const Sync = {
+    on: false, timer: null, note: "",
+    async init() {
+      if (!location.protocol.startsWith("http")) return;
+      try {
+        const r = await fetch("./api/ping", { cache: "no-store" });
+        if (!r.ok) return;
+        this.on = (await r.json()).app === "english-20-minutes";
+      } catch (_) { return; }
+      if (!this.on) return;
+      await this.pull();
+      this.push();
+      if (App.view === "home") Views.render();
+    },
+    async pull() {
+      let files = [];
+      try { files = (await (await fetch("./api/inbox", { cache: "no-store" })).json()).files || []; } catch (_) { return; }
+      const st = Store.state, notes = [];
+      for (const f of files) {
+        if (st.settings.synced.includes(f.name)) continue;
+        try {
+          const parsed = C.State.parseFile(JSON.stringify(f.data));
+          if (parsed.kind === "bank" || parsed.kind === "nivel") notes.push(App.applyFile(parsed));
+        } catch (_) { /* archivo no válido: se ignora y no se vuelve a intentar */ }
+        st.settings.synced = [...st.settings.synced, f.name].slice(-100);
+      }
+      if (notes.length) { this.note = notes.join(" "); Store.save(); }
+    },
+    schedule() {
+      if (!this.on) return;
+      clearTimeout(this.timer);
+      this.timer = setTimeout(() => this.push(), 2000);
+    },
+    push(keepalive = false) {
+      if (!this.on) return;
+      clearTimeout(this.timer);
+      const body = JSON.stringify(C.State.toExport(Store.state));
+      fetch("./api/app-estado", { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: keepalive && body.length < 60000 }).catch(() => {});
+    }
+  };
 
   /* --------------------------------------------------------------- Content */
   const Content = {
@@ -364,7 +412,7 @@
     start() {
       if (!this.supported || this.active || !Session.s) return;
       const c = Session.s.current;
-      if (!c || !c.voice || c.evaluated) return;
+      if (!c || !c.voice || c.evaluated || c.locked) return;
       Speech.stop(); // que la voz de la app no se transcriba
       this.error = null;
       this.target = c;
@@ -444,12 +492,15 @@
 
     isCurrent() { return !!(Session.s && Session.s.current === this.target); },
 
+    /* Campo que recibe el dictado: la respuesta del reto o el intento de producción. */
+    fieldId() { return Session.s && Session.kind === "challenge" ? "challenge-text" : "attempt-text"; },
+
     setText(text) {
       const c = this.target;
       c.text = text;
-      const ta = document.getElementById("challenge-text");
+      const ta = document.getElementById(this.fieldId());
       if (ta) { ta.value = text; ta.scrollTop = ta.scrollHeight; }
-      if (!c.evaluated) Views.updateChallengeLive();
+      if (Session.kind === "challenge" && !c.evaluated) Views.updateChallengeLive();
     }
   };
 
@@ -594,9 +645,16 @@
       if (kind === "gap")       c.options = Util.shuffle(it.options);
       if (kind === "move")      c.options = Util.shuffle([it.answer, ...it.distractors]);
       if (kind === "trap")      c.options = Util.shuffle([it.right, it.wrong, it.alt]);
+      // «Dilo antes de verlo»: primero produces y después eliges.
+      if (PRODUCE_KINDS.includes(kind) && Store.state.settings.produceFirst && this.s.mode !== "errors") Object.assign(c, { phase: "produce", text: "", voice: { ms: 0, words: 0 } });
       if (kind === "challenge") Object.assign(c, { text: "", evaluated: false, checks: it.selfCheck.map(() => false), voice: { ms: 0, words: 0 } });
-      if (kind === "listen")    Object.assign(c, { answers: it.questions.map(() => null), plays: 0, rate: 1 });
-      if (kind === "card")      Object.assign(c, { revealed: false, attempt: "" });
+      if (kind === "listen") {
+        Object.assign(c, { answers: it.questions.map(() => null), plays: 0, rate: 1 });
+        // Audio ya trabajado → dictado con huecos (las preguntas ya se recordarían de memoria).
+        const rec = Store.state.items[it.id];
+        if (rec && rec.seen > 0) Object.assign(c, { mode: "dictation", dict: C.Dictation.pick(it.lines), gapAnswers: null });
+      }
+      if (kind === "card")      Object.assign(c, { revealed: false, text: "", voice: { ms: 0, words: 0 } });
       this.s.current = c;
       this.s.answered = false;
     },
@@ -624,19 +682,31 @@
     /* Respuesta en ítems de opción múltiple. */
     choose(optIdx) {
       const s = this.s;
-      if (s.phase !== "item" || s.answered || !OPTION_KINDS.includes(this.kind)) return;
+      if (s.phase !== "item" || s.answered || !OPTION_KINDS.includes(this.kind) || s.current.phase === "produce") return;
       const choice = s.current.options[optIdx];
       if (choice === undefined) return;
       const correct = this.correctOption();
       const ok = choice === correct;
       s.current.selected = optIdx;
       s.answered = true;
-      this.score(ok, ok ? 4 : 1, { given: choice, expected: correct });
+      const q = s.current.phase === "choose" ? C.Produce.quality(ok, s.current.text, correct) : ok ? 4 : 1;
+      this.score(ok, q, { given: choice, expected: correct });
       if (ok) {
         const it = this.item;
         Speech.say(this.kind === "gap" ? it.sentence.replace("___", it.answer) : choice, { auto: true });
       }
       Views.render();
+    },
+
+    /* Fin de la fase «dilo antes de verlo»: se detiene el dictado y aparecen las opciones. */
+    showOptions() {
+      const c = this.s.current;
+      if (!c || c.phase !== "produce") return;
+      const ta = document.getElementById("attempt-text");
+      if (ta && !Voice.active) c.text = ta.value;
+      Voice.stop(() => {
+        if (Session.s && Session.s.current === c && c.phase === "produce") { c.phase = "choose"; c.locked = true; Views.render(); }
+      });
     },
 
     /* ok: cuenta para la puntuación de la sesión · q: calidad SM-2 (0–5). */
@@ -667,6 +737,34 @@
       Views.render();
     },
 
+    /* Dictado: comprueba los huecos escritos. Cada hueco puntúa; el audio cuenta
+     * como acertado si están todos (4) o todos menos uno (3). */
+    checkDictation() {
+      const s = this.s, c = s.current, it = this.item;
+      if (s.answered || this.kind !== "listen" || c.mode !== "dictation") return;
+      const vals = c.dict.gaps.map((_, k) => { const el = document.querySelector(`[data-gap="${k}"]`); return el ? el.value.trim() : ""; });
+      c.gapAnswers = vals;
+      const okCount = c.dict.gaps.filter((g, k) => C.Dictation.check(vals[k], g.word)).length;
+      const n = c.dict.gaps.length;
+      s.results[this.blockKey].total += n;
+      s.results[this.blockKey].ok += okCount;
+      s.answered = true;
+      Speech.stop();
+      if (okCount < n) s.misses.push(this.entry);
+      const q = okCount === n ? 4 : okCount >= n - 1 && n > 1 ? 3 : 1;
+      const line = it.lines[c.dict.line].text;
+      SRS.record(this.entry, q, q < 3 ? { given: c.dict.gaps.map((g, k) => vals[k] || "—").join(" · "), expected: line } : null);
+      Views.render();
+    },
+
+    playLine() {
+      const c = this.s.current;
+      if (Speech.playing) { Speech.stop(); Views.updateListenUI(); return; }
+      c.plays += 1;
+      Speech.playLines([this.item.lines[c.dict.line]], c.rate, () => Views.updateListenUI());
+      Views.updateListenUI();
+    },
+
     playListening() {
       const c = this.s.current;
       if (Speech.playing) { Speech.stop(); Views.updateListenUI(); return; }
@@ -685,18 +783,21 @@
     revealCard() {
       const c = this.s.current;
       if (this.kind !== "card" || c.revealed) return;
-      const ta = document.getElementById("card-attempt");
-      if (ta) c.attempt = ta.value;
-      c.revealed = true;
-      Speech.say(this.item.en, { auto: true });
-      Views.render();
+      const ta = document.getElementById("attempt-text");
+      if (ta && !Voice.active) c.text = ta.value;
+      Voice.stop(() => {
+        if (!Session.s || Session.s.current !== c || c.revealed) return;
+        c.revealed = true; c.locked = true;
+        Speech.say(this.item.en, { auto: true });
+        Views.render();
+      });
     },
     /* Autoevaluación: 1 "No lo sabía" · 3 "Con dudas" · 5 "Lo sabía". */
     gradeCard(q) {
       if (this.kind !== "card" || !this.s.current.revealed || this.s.answered) return;
       this.s.answered = true;
       this.s.current.grade = q;
-      this.score(q >= 3, q, { given: this.s.current.attempt.trim() || "(en blanco)", expected: this.item.en });
+      this.score(q >= 3, q, { given: this.s.current.text.trim() || "(en blanco)", expected: this.item.en });
       Views.render();
     },
 
@@ -723,6 +824,7 @@
       const q = score >= 0.85 ? 5 : score >= 0.7 ? 4 : score >= 0.6 ? 3 : score >= 0.3 ? 2 : 1;
       this.score(score >= 0.6, q, q < 3 ? { given: `${c.finalScore} % del reto`, expected: D.SCENARIOS[it.scenario] || it.brief } : null);
       this.logDelivery(c, it);
+      this.logProduction(c, it);
       Views.render();
     },
 
@@ -743,6 +845,19 @@
         authority: all.filter((h) => authority.has(h.t)).reduce((a, h) => a + h.n, 0),
         social
       }].slice(-C.State.MAX_DELIVERY);
+      Store.save();
+    },
+
+    /* Guarda el texto del reto para que /fluidez-activa dé feedback sobre lo que de verdad dijiste. */
+    logProduction(c, it) {
+      const spoken = !!(c.voice && c.voice.ms >= 5000);
+      const p = C.State.normalizeProduction({
+        date: Util.today(), id: it.id, scenario: D.SCENARIOS[it.scenario] || it.scenario, brief: it.brief, text: c.text,
+        spoken, secs: spoken ? Math.round(c.voice.ms / 1000) : 0, wpm: spoken ? Math.round(c.voice.words / (c.voice.ms / 60000)) : 0,
+        score: c.finalScore, social: it.context === "social"
+      });
+      if (!p) return;
+      Store.state.productions = [...Store.state.productions, p].slice(-C.State.MAX_PRODUCTIONS);
       Store.save();
     },
 
@@ -1058,7 +1173,9 @@
             <h2 class="text-sm font-semibold text-zinc-200">Copia de seguridad</h2>
             <span class="text-xs ${expNudge ? "text-amber-300" : "text-zinc-400"}">Última copia: ${expLabel}</span>
           </div>
-          <p class="mt-1.5 text-xs text-zinc-400 leading-relaxed">Tu progreso y tu banco de palabras solo se guardan en este navegador. Exporta un archivo de vez en cuando (Safari puede borrar los datos de webs que no abres en 7 días) o para pasarlos a otro dispositivo.</p>
+          ${Sync.on ? `<p class="mt-1.5 text-xs text-emerald-300/90 leading-relaxed">⟳ Sincronización automática con la carpeta <code class="font-mono">progreso/</code> activa: /fluidez-activa ve tus errores y retos, y lo que generan las skills entra solo en la app.</p>` : ""}
+          ${Sync.note ? `<p class="mt-1.5 text-xs text-emerald-200">${Util.esc(Sync.note)}</p>` : ""}
+          <p class="mt-1.5 text-xs text-zinc-400 leading-relaxed">Tu progreso y tu banco de palabras solo se guardan en este navegador. Exporta un archivo de vez en cuando (Safari puede borrar los datos de webs que no abres en 7 días) o para pasarlos a otro dispositivo.${Sync.on ? "" : " Con <code class=\"font-mono\">npm start</code> la app se sincroniza sola con Claude Code."}</p>
           <div class="mt-4 flex flex-wrap gap-3">
             <button data-action="export" class="rounded-lg bg-zinc-100 px-4 py-2 text-xs font-semibold text-zinc-900 hover:bg-white transition">Exportar copia (.json)</button>
             <button data-action="import" class="rounded-lg border border-zinc-700 px-4 py-2 text-xs font-semibold text-zinc-200 hover:border-zinc-500 transition">Importar copia</button>
@@ -1155,6 +1272,9 @@
           <label class="inline-flex items-center gap-2 cursor-pointer select-none ${Speech.supported ? "" : "opacity-40 pointer-events-none"}">
             <input type="checkbox" data-action="toggle-tts" class="accent-zinc-300" ${Store.state.settings.tts ? "checked" : ""}> Leer en voz alta al acertar
           </label>
+          <label class="inline-flex items-center gap-2 cursor-pointer select-none" title="En frases de conversación y reunión: primero la dices tú y después ves las opciones">
+            <input type="checkbox" data-action="toggle-produce" class="accent-zinc-300" ${Store.state.settings.produceFirst ? "checked" : ""}> Decirlo antes de ver las opciones
+          </label>
           ${Speech.supported || Voice.supported ? `<label class="inline-flex items-center gap-2">Acento (voz y dictado)
             <select data-action="voice" class="bg-zinc-900 border border-zinc-800 rounded-md px-2 py-1 text-zinc-300">
               ${[["en-GB", "British"], ["en-US", "American"], ["en-AU", "Australian"]].map(([v, l]) => `<option value="${v}" ${Store.state.settings.voice === v ? "selected" : ""}>${l}</option>`).join("")}
@@ -1210,10 +1330,10 @@
         ? [...new Set(Session.s.queue[k].map((e) => Content.patternOf(e.pool, e.it).label))].join(", ")
         : "";
       const how = {
-        vocab: "Frases para conversar y para intervenir en reuniones, vocabulario amplio (phrasal verbs, expresiones, colocaciones), HR Analytics y, si toca, palabras de tu banco personal. Ojo: todas las opciones pueden ser gramaticales. Elige la que diría un nativo en esa situación.",
+        vocab: `Frases para conversar y para intervenir en reuniones, vocabulario amplio (phrasal verbs, expresiones, colocaciones), HR Analytics y, si toca, palabras de tu banco personal. Ojo: todas las opciones pueden ser gramaticales. Elige la que diría un nativo en esa situación.${Store.state.settings.produceFirst ? " En las frases de conversación y reunión, primero dila tú (hablando o escribiendo) y después verás las opciones: así pasa de reconocerla a que te salga." : ""}`,
         grammar: "Completa cada frase con la estructura correcta. Son frases de tu trabajo y la regla aparece en una línea. También salen las trampas típicas del español.",
         listening: Speech.supported
-          ? "Escucha y responde. Puedes repetir el audio y ponerlo más lento. Mark habla con acento australiano. Intenta responder sin mirar la transcripción: aparece al final."
+          ? "Escucha y responde. Puedes repetir el audio y ponerlo más lento. Mark habla con acento australiano. Intenta responder sin mirar la transcripción: aparece al final. Los audios que ya conoces vuelven como dictado: escuchas una frase y escribes las palabras que faltan."
           : "Tu navegador no puede reproducir voz, así que verás la transcripción para leer. Para escuchar, usa Chrome, Edge o Safari.",
         challenges: Voice.supported
           ? `Lee el escenario y responde en voz alta, como en la situación real (60–90 s). Tu voz se transcribe y luego puedes corregir el texto. Usa los chunks obligatorios.</p><p class="mt-2 text-xs text-zinc-400">${PRIVACY_NOTE}`
@@ -1275,8 +1395,35 @@
 
     isOk() { const c = Session.s.current; return c.options[c.selected] === Session.correctOption(); },
 
+    /* Fase «dilo antes de verlo»: intento libre (hablado o escrito) antes de las opciones. */
+    producePanel(prompt) {
+      return `<div class="rounded-2xl border border-amber-400/30 bg-amber-400/5 p-5 space-y-3">
+          <div class="text-[11px] uppercase tracking-wider text-amber-300">Dilo antes de verlo</div>
+          <p class="text-sm text-zinc-300">${prompt} Dilo en voz alta${Voice.supported ? " (o pulsa el micro)" : ""} o escríbelo. No hace falta que sea perfecto: el esfuerzo de recuperarlo es lo que lo fija.</p>
+          ${this.voiceControls("attempt")}
+          <textarea id="attempt-text" rows="2" lang="en" spellcheck="false" autocomplete="off" placeholder="Tu versión en inglés… (Enter para ver las opciones)"
+            class="w-full rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 text-[15px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-amber-400/40">${Util.esc(Session.s.current.text || "")}</textarea>
+        </div>
+        ${this.footer("Ver opciones", true, "show-options", "Si no te sale, pasa: también cuenta")}`;
+    },
+    /* Lo que dijo el alumno frente a la frase buena, tras responder. */
+    attemptEcho(target) {
+      const c = Session.s.current;
+      if (c.phase !== "choose") return "";
+      if (!String(c.text || "").trim()) return `<p class="text-xs text-zinc-500">No intentaste decirla antes: la próxima vez, prueba primero, aunque salga a medias.</p>`;
+      const sim = C.Produce.similarity(c.text, target);
+      const tone = sim >= 0.75 ? "text-emerald-300" : sim >= 0.45 ? "text-amber-300" : "text-rose-300";
+      const verdict = sim >= 0.75 ? "¡Te ha salido!" : sim >= 0.45 ? "Cerca: fíjate en lo que cambia." : "Aún no te sale: repítela en voz alta 2 veces.";
+      return `<p class="text-sm"><span class="text-zinc-500">Tu versión:</span> <span class="text-zinc-200">${Util.esc(c.text)}</span> <span class="${tone} text-xs font-medium">· ${Math.round(sim * 100)} % · ${verdict}</span></p>`;
+    },
+
     item_register() {
       const S = Session, it = S.item, c = S.s.current;
+      if (c.phase === "produce") return `${this.itemHead()}
+        <div class="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5 mb-5">
+          <div class="text-[11px] uppercase tracking-wider text-zinc-500">Frase plana</div>
+          <p class="mt-1.5 text-lg text-zinc-300">${Util.esc(it.plain)}</p>
+        </div>${this.producePanel("¿Cómo lo dirías de forma profesional?")}`;
       return `${this.itemHead()}
         <div class="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5 mb-5">
           <div class="text-[11px] uppercase tracking-wider text-zinc-500">Frase plana</div>
@@ -1287,6 +1434,7 @@
         ${S.s.answered ? this.feedbackBox(this.isOk(), `
           ${it.tone && TONE[it.tone] ? `<div>${this.badge(TONE[it.tone].label, TONE[it.tone].cls)}</div>` : ""}
           <p class="text-[17px] leading-relaxed text-zinc-50">${this.highlight(it.c1, it.chunks)}</p>
+          ${this.attemptEcho(it.c1)}
           <div class="flex flex-wrap gap-1.5">${it.chunks.map((ch) => `<span class="rounded-md bg-amber-400/10 border border-amber-400/30 px-2 py-0.5 text-xs text-amber-200">${Util.esc(ch)}</span>`).join("")}</div>
           <p class="text-sm text-zinc-400 leading-relaxed">${Util.esc(it.whyItWorks)}</p>
           ${it.tone && TONE[it.tone] && TONE[it.tone].note ? `<p class="text-xs leading-relaxed ${it.tone === "buzzword" ? "text-amber-200/90" : "text-zinc-400"}">${TONE[it.tone].note}</p>` : ""}
@@ -1318,15 +1466,18 @@
     item_move() {
       const S = Session, it = S.item, c = S.s.current;
       const social = S.entry.pool === "conversation";
-      return `${this.itemHead([this.badge(D.MOVE_FUNCTIONS[it.fn], "bg-amber-400/10 text-amber-300")])}
+      const head = `${this.itemHead([this.badge(D.MOVE_FUNCTIONS[it.fn], "bg-amber-400/10 text-amber-300")])}
         <div class="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5 mb-5">
           <div class="text-[11px] uppercase tracking-wider text-zinc-500">${social ? "Situación" : "Situación en la reunión"}</div>
           <p class="mt-1.5 text-lg text-zinc-200">${Util.esc(it.situation)}</p>
-        </div>
+        </div>`;
+      if (c.phase === "produce") return `${head}${this.producePanel("¿Qué dirías?")}`;
+      return `${head}
         <p class="text-sm text-zinc-300 mb-3">¿Qué dirías?</p>
         ${this.optionList(c.options, it.answer, c.selected, S.s.answered)}
         ${S.s.answered ? this.feedbackBox(this.isOk(), `
           <p class="text-[17px] leading-relaxed text-zinc-50">${Util.esc(it.answer)}</p>
+          ${this.attemptEcho(it.answer)}
           <p class="text-sm text-zinc-400 leading-relaxed">${Util.esc(it.note)}</p>
           <div class="flex gap-4">${this.speakBtn(it.answer)}${this.speakBtn(it.answer, "Acento australiano", "en-AU")}</div>
           <p class="text-xs text-zinc-500">Repítela en voz alta 2 veces: ${social ? "la próxima vez te saldrá sola." : "en la próxima reunión te saldrá sola."}</p>`) : ""}
@@ -1351,8 +1502,48 @@
         ${this.footer("Siguiente", S.s.answered)}`;
     },
 
+    /* Repaso de un audio: dictado con huecos sobre una frase. */
+    item_dictation() {
+      const S = Session, it = S.item, c = S.s.current, done = S.s.answered;
+      const line = it.lines[c.dict.line], sp = D.SPEAKERS[line.who];
+      const gapAt = new Map(c.dict.gaps.map((g, k) => [g.pos, k]));
+      const words = line.text.split(/\s+/).map((w, i) => {
+        if (!gapAt.has(i)) return Util.esc(w);
+        const k = gapAt.get(i), g = c.dict.gaps[k];
+        const lead = w.slice(0, w.indexOf(g.word)), trail = w.slice(w.indexOf(g.word) + g.word.length);
+        if (done) {
+          const ok = C.Dictation.check(c.gapAnswers[k], g.word);
+          return `${Util.esc(lead)}<span class="font-semibold ${ok ? "text-emerald-300" : "text-rose-300"}">${Util.esc(g.word)}</span>${!ok && c.gapAnswers[k] ? ` <span class="text-xs text-zinc-500 line-through">${Util.esc(c.gapAnswers[k])}</span>` : ""}${Util.esc(trail)}`;
+        }
+        return `${Util.esc(lead)}<input data-gap="${k}" lang="en" autocomplete="off" spellcheck="false" aria-label="Hueco ${k + 1}" style="width:${Math.max(4, g.word.length + 1)}ch" class="mx-0.5 rounded border-b-2 border-violet-400/60 bg-zinc-950 px-1 py-0.5 text-center text-violet-100 focus:outline-none focus:ring-2 focus:ring-violet-400/40">${Util.esc(trail)}`;
+      }).join(" ");
+      const okCount = done ? c.dict.gaps.filter((g, k) => C.Dictation.check(c.gapAnswers[k], g.word)).length : 0;
+      const transcript = done ? `<div class="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5 space-y-3 fade-in">
+          <div class="text-[11px] uppercase tracking-wider text-zinc-500">Transcripción completa</div>
+          ${it.lines.map((l, i) => { const s2 = D.SPEAKERS[l.who]; return `<p class="text-[15px] leading-relaxed ${i === c.dict.line ? "text-zinc-50" : "text-zinc-400"}"><span class="font-semibold ${s2.color}">${s2.name}:</span> ${Util.esc(l.text)}</p>`; }).join("")}
+        </div>` : "";
+      return `${this.itemHead([this.badge("Dictado", "bg-violet-500/10 text-violet-300")])}
+        <div class="rounded-2xl border border-violet-400/20 bg-zinc-900/40 p-6 mb-5 space-y-4">
+          <div><h3 class="text-lg font-semibold text-zinc-50">${Util.esc(it.title)}</h3>
+          <p class="mt-1 text-sm text-zinc-400">Ya conoces este audio. Ahora entrena el oído fino: escucha la frase de <span class="font-semibold ${sp.color}">${sp.name}</span> y escribe las palabras que faltan.</p></div>
+          ${Speech.supported ? `<div class="flex flex-wrap items-center gap-3">
+            <button id="play-btn" data-action="play-line" class="inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition"></button>
+            <div class="inline-flex rounded-lg border border-zinc-700 p-0.5 text-xs" role="group" aria-label="Velocidad">
+              <button data-action="rate" data-rate="1" id="rate-1" class="rounded-md px-2.5 py-1.5 transition">Normal</button>
+              <button data-action="rate" data-rate="0.8" id="rate-0.8" class="rounded-md px-2.5 py-1.5 transition">Lento</button>
+            </div>
+            <span id="play-count" class="text-xs text-zinc-500 tabular-nums"></span>
+          </div>` : `<p class="text-xs text-amber-300/80">Tu navegador no reproduce voz: rellena los huecos por contexto.</p>`}
+          <p class="text-lg leading-loose text-zinc-100"><span class="font-semibold ${sp.color}">${sp.name}:</span> ${words}</p>
+        </div>
+        ${done ? `<div class="mb-5 text-sm ${okCount === c.dict.gaps.length ? "text-emerald-300" : "text-zinc-300"}">${okCount}/${c.dict.gaps.length} huecos. ${okCount === c.dict.gaps.length ? "Oído fino." : "Vuelve a escuchar la frase leyéndola: fíjate en cómo se unen las palabras."}</div>` : ""}
+        ${transcript}
+        ${done ? this.footer("Siguiente", true) : this.footer("Comprobar", true, "check-dictation")}`;
+    },
+
     item_listen() {
       const S = Session, it = S.item, c = S.s.current, done = S.s.answered;
+      if (c.mode === "dictation") return this.item_dictation();
       const speakers = [...new Set(it.lines.map((l) => l.who))].map((w) => D.SPEAKERS[w]);
       const auMissing = Speech.supported && speakers.some((sp) => sp.lang === "en-AU") && Speech.voices.length && !Speech.hasVoice("en-AU");
 
@@ -1419,15 +1610,16 @@
       else if (!S.s.answered) footer = this.footer("Siguiente", false, "next", "¿Lo sabías?");
       else footer = this.footer("Siguiente", true);
 
-      const attemptOk = c.revealed && c.attempt.trim() && c.attempt.trim().toLowerCase() === it.en.toLowerCase();
+      const sim = c.revealed && c.text.trim() ? C.Produce.similarity(c.text, it.en) : 0;
+      const attemptOk = sim >= 0.75;
       return `${this.itemHead()}
         <div class="rounded-2xl border border-amber-400/20 bg-zinc-900/40 p-6 mb-5">
           <div class="text-[11px] uppercase tracking-wider text-zinc-500">¿Cómo se dice en inglés?</div>
           <p class="mt-2 text-xl text-zinc-100">${Util.esc(it.es)}</p>
         </div>
-        ${!c.revealed ? `<input id="card-attempt" lang="en" autocomplete="off" placeholder="Escríbelo o dilo en voz alta y pulsa «Ver respuesta»" class="w-full rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 text-[15px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-amber-400/40">` : `
+        ${!c.revealed ? `${this.voiceControls("attempt")}<textarea id="attempt-text" rows="2" lang="en" spellcheck="false" autocomplete="off" placeholder="Dilo en voz alta (micro) o escríbelo y pulsa «Ver respuesta»" class="w-full rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 text-[15px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-amber-400/40">${Util.esc(c.text)}</textarea>` : `
         <div class="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5 space-y-3 fade-in">
-          ${c.attempt.trim() ? `<p class="text-sm ${attemptOk ? "text-emerald-300" : "text-zinc-400"}">Tu respuesta: ${Util.esc(c.attempt)}</p>` : ""}
+          ${c.text.trim() ? `<p class="text-sm ${attemptOk ? "text-emerald-300" : "text-zinc-400"}">Tu respuesta: ${Util.esc(c.text)} <span class="text-xs">· ${Math.round(sim * 100)} %</span></p>` : ""}
           <p class="text-2xl font-semibold text-amber-200">${Util.esc(it.en)}</p>
           ${it.example ? `<p class="text-sm text-zinc-300 italic">“${Util.esc(it.example)}”</p>` : ""}
           <div class="flex gap-4">${this.speakBtn(it.en)}${it.example ? this.speakBtn(it.example, "Ejemplo") : ""}</div>
@@ -1523,8 +1715,8 @@
         ta.focus();
         ta.setSelectionRange(ta.value.length, ta.value.length);
       }
-      const att = document.getElementById("card-attempt");
-      if (att) att.focus();
+      const att = document.getElementById("attempt-text");
+      if (att && !Voice.active) { att.focus(); att.setSelectionRange(att.value.length, att.value.length); }
     },
 
     updateTimer() {
@@ -1546,7 +1738,7 @@
         btn.innerHTML = `<span class="w-2.5 h-2.5 rounded-sm bg-violet-300"></span>Detener`;
       } else {
         btn.className = "inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition bg-violet-400 text-zinc-950 hover:bg-violet-300";
-        btn.innerHTML = `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>${c.plays ? "Escuchar otra vez" : "Escuchar"}`;
+        btn.innerHTML = `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>${c.mode === "dictation" ? (c.plays ? "Otra vez la frase" : "Escuchar la frase") : c.plays ? "Escuchar otra vez" : "Escuchar"}`;
       }
       for (const r of ["1", "0.8"]) {
         const el = document.getElementById(`rate-${r}`);
@@ -1574,22 +1766,23 @@
       hint.textContent = ok ? "" : `${words}/15 palabras mínimo`;
     },
 
-    voiceControls() {
+    voiceControls(type = "challenge") {
       if (!Voice.supported) {
-        return `<p class="mb-3 text-xs text-zinc-500">Este navegador no permite dictado por voz. Para responder hablando, usa Chrome, Edge o Safari.</p>`;
+        return type === "attempt" ? "" : `<p class="mb-3 text-xs text-zinc-500">Este navegador no permite dictado por voz. Para responder hablando, usa Chrome, Edge o Safari.</p>`;
       }
       return `<div class="mb-3 flex flex-wrap items-center gap-3">
         <button type="button" id="mic-btn" data-action="mic" aria-pressed="false"></button>
         <span id="voice-status" class="text-xs text-zinc-500 tabular-nums" aria-live="polite"></span>
-        <p class="basis-full text-[11px] leading-snug text-zinc-500">🔒 ${PRIVACY_NOTE}</p>
+        ${type === "challenge" ? `<p class="basis-full text-[11px] leading-snug text-zinc-500">🔒 ${PRIVACY_NOTE}</p>` : ""}
       </div>`;
     },
 
     updateVoiceUI() {
       const btn = document.getElementById("mic-btn");
       const status = document.getElementById("voice-status");
-      const ta = document.getElementById("challenge-text");
+      const ta = document.getElementById(Voice.fieldId());
       if (!btn || !Session.s) return;
+      const isChallenge = Session.kind === "challenge";
       const c = Session.s.current, ms = Voice.liveMs(), secs = Math.floor(ms / 1000);
       const mic = `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v5"/></svg>`;
       const accent = { "en-GB": "British", "en-US": "American", "en-AU": "Australian" }[Store.state.settings.voice] || "";
@@ -1602,12 +1795,12 @@
         status.textContent = `Grabando ${Util.mmss(secs)} · habla en inglés (${accent})`;
       } else {
         btn.className = "inline-flex items-center gap-2 rounded-xl border border-emerald-400/40 bg-emerald-400/10 px-4 py-2.5 text-sm font-medium text-emerald-100 hover:bg-emerald-400/20 transition";
-        btn.innerHTML = `${mic}${c.voice && c.voice.ms > 0 ? "Seguir hablando" : "Responder hablando"}`;
+        btn.innerHTML = `${mic}${c.voice && c.voice.ms > 0 ? "Seguir hablando" : isChallenge ? "Responder hablando" : "Decirlo"}`;
         if (Voice.error) { status.className = "text-xs text-rose-300"; status.textContent = Voice.error; }
-        else if (ms > 0) { status.className = "text-xs tabular-nums text-zinc-400"; status.textContent = `Has hablado ${Util.mmss(secs)}. Revisa la transcripción y corrige lo que haga falta.`; }
-        else { status.className = "text-xs text-zinc-500"; status.textContent = "Objetivo: 60–90 s"; }
+        else if (ms > 0) { status.className = "text-xs tabular-nums text-zinc-400"; status.textContent = isChallenge ? `Has hablado ${Util.mmss(secs)}. Revisa la transcripción y corrige lo que haga falta.` : "Listo. Pulsa Enter para seguir."; }
+        else { status.className = "text-xs text-zinc-500"; status.textContent = isChallenge ? "Objetivo: 60–90 s" : "Una frase basta"; }
       }
-      if (ta && !c.evaluated) {
+      if (ta && !c.evaluated && !c.locked) {
         ta.readOnly = Voice.active;
         ta.classList.toggle("ring-2", Voice.active);
         ta.classList.toggle("ring-rose-400/40", Voice.active);
@@ -1732,6 +1925,7 @@
       if (Session.restore()) this.view = "session";
       Views.render();
       this.registerSW();
+      Sync.init();
     },
 
     /* ---- Copia de seguridad ---- */
@@ -1761,25 +1955,11 @@
         const z = document.getElementById("backup-zone");
         if (!z) return;
         // Archivos que solo AÑADEN (no hace falta confirmar): no tocan el resto del progreso.
-        if (parsed.kind === "bank") {
-          // /fluidez-activa: chunks nuevos para el banco + resumen para «Tu nivel».
-          const st = Store.state, r = C.Bank.merge(st.custom, parsed.words, Util.today());
-          st.custom = r.custom;
-          if (parsed.fluidez && (!st.fluidez || parsed.fluidez.fecha >= st.fluidez.fecha)) st.fluidez = parsed.fluidez;
-          Store.save(); this.pendingImport = null;
+        if (parsed.kind === "bank" || parsed.kind === "nivel") {
+          const msg = this.applyFile(parsed);
+          this.pendingImport = null;
           this.go("home");
-          const parts = [r.added ? `${Util.plural(r.added, "expresión añadida", "expresiones añadidas")} a tu banco` : parsed.words.length ? "Las expresiones ya estaban en tu banco" : "", parsed.fluidez ? "indicadores de fluidez actualizados" : ""].filter(Boolean);
-          const msg = parts.join(" · ");
-          return this.backupMsg(`${msg.charAt(0).toUpperCase()}${msg.slice(1)}. Tu progreso no cambia.`, "text-emerald-300");
-        }
-        if (parsed.kind === "nivel") {
-          // /chequeo-nivel: historial de nivel de expresión.
-          const st = Store.state, before = st.nivel.length;
-          st.nivel = C.Nivel.merge(st.nivel, parsed.entries);
-          Store.save(); this.pendingImport = null;
-          this.go("home");
-          const last = st.nivel[st.nivel.length - 1];
-          return this.backupMsg(`Nivel actualizado: ${last.global.nivel} (${last.global.puntos}) · ${Util.plural(st.nivel.length, "chequeo", "chequeos")}${st.nivel.length > before ? "" : " (ya estaban)"}. Tu progreso no cambia.`, "text-emerald-300");
+          return this.backupMsg(msg, "text-emerald-300");
         }
         const next = parsed.state;
         this.pendingImport = next;
@@ -1798,6 +1978,27 @@
       }
     },
 
+    /* Aplica un archivo que solo AÑADE (de /fluidez-activa o /chequeo-nivel) y devuelve el mensaje. */
+    applyFile(parsed) {
+      const st = Store.state;
+      if (parsed.kind === "bank") {
+        // /fluidez-activa: chunks nuevos para el banco + resumen para «Tu nivel».
+        const r = C.Bank.merge(st.custom, parsed.words, Util.today());
+        st.custom = r.custom;
+        if (parsed.fluidez && (!st.fluidez || parsed.fluidez.fecha >= st.fluidez.fecha)) st.fluidez = parsed.fluidez;
+        Store.save();
+        const parts = [r.added ? `${Util.plural(r.added, "expresión añadida", "expresiones añadidas")} a tu banco` : parsed.words.length ? "Las expresiones ya estaban en tu banco" : "", parsed.fluidez ? "indicadores de fluidez actualizados" : ""].filter(Boolean);
+        const msg = parts.join(" · ");
+        return `${msg.charAt(0).toUpperCase()}${msg.slice(1)}. Tu progreso no cambia.`;
+      }
+      // /chequeo-nivel: historial de nivel de expresión.
+      const before = st.nivel.length;
+      st.nivel = C.Nivel.merge(st.nivel, parsed.entries);
+      Store.save();
+      const last = st.nivel[st.nivel.length - 1];
+      return `Nivel actualizado: ${last.global.nivel} (${last.global.puntos}) · ${Util.plural(st.nivel.length, "chequeo", "chequeos")}${st.nivel.length > before ? "" : " (ya estaban)"}. Tu progreso no cambia.`;
+    },
+
     bind() {
       const root = Views.root;
 
@@ -1811,6 +2012,9 @@
           case "choose": Session.choose(Number(el.dataset.idx)); break;
           case "lchoose": Session.answerListening(Number(el.dataset.q), Number(el.dataset.idx)); break;
           case "play": Session.playListening(); break;
+          case "play-line": Session.playLine(); break;
+          case "check-dictation": Session.checkDictation(); break;
+          case "show-options": Session.showOptions(); break;
           case "rate": Session.setRate(Number(el.dataset.rate)); break;
           case "reveal": Session.revealCard(); break;
           case "grade": Session.gradeCard(Number(el.dataset.q)); break;
@@ -1861,6 +2065,7 @@
       root.addEventListener("change", (e) => {
         const el = e.target;
         if (el.dataset.action === "toggle-tts") { Store.state.settings.tts = el.checked; Store.save(); }
+        if (el.dataset.action === "toggle-produce") { Store.state.settings.produceFirst = el.checked; Store.save(); }
         if (el.dataset.action === "voice") { Store.state.settings.voice = el.value; Store.save(); Speech.say("Hi! This is how I sound.", { lang: el.value }); }
         if (el.dataset.action === "check" && Session.s) { Session.s.current.checks[Number(el.dataset.idx)] = el.checked; Session.persist(); }
         if (el.dataset.action === "import-file") this.readImport(el.files && el.files[0]);
@@ -1872,6 +2077,7 @@
           Views.updateChallengeLive();
           Session.persist();
         }
+        if (e.target.id === "attempt-text" && Session.s && !Voice.active) Session.s.current.text = e.target.value;
       });
 
       // Reloj en pausa con la pestaña oculta; la sesión se guarda al salir o recargar.
@@ -1879,7 +2085,7 @@
         if (this.view !== "session" || !Session.s) return;
         if (document.hidden) Session.pause(); else Session.resume();
       });
-      window.addEventListener("pagehide", () => { if (this.view === "session" && Session.s) Session.pause(); });
+      window.addEventListener("pagehide", () => { if (this.view === "session" && Session.s) Session.pause(); Sync.push(true); });
 
       document.addEventListener("keydown", (e) => {
         if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -1890,7 +2096,17 @@
         // Con la confirmación de salida abierta: Esc la cierra y Enter activa el botón enfocado.
         if (Views.exitAsk) { if (e.key === "Escape") { e.preventDefault(); Views.hideExitAsk(); } return; }
         if (e.key === "Escape") { e.preventDefault(); Session.requestExit(); return; }
-        if (e.target.id === "card-attempt" && e.key === "Enter") { e.preventDefault(); Session.revealCard(); return; }
+        if (e.target.id === "attempt-text" && e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          if (Session.kind === "card") Session.revealCard(); else Session.showOptions();
+          return;
+        }
+        if (e.target.dataset && e.target.dataset.gap !== undefined && e.key === "Enter") {
+          e.preventDefault();
+          const nextGap = document.querySelector(`[data-gap="${Number(e.target.dataset.gap) + 1}"]`);
+          if (nextGap) nextGap.focus(); else Session.checkDictation();
+          return;
+        }
         if (typing) return;
         if (/^[1-4]$/.test(e.key) && OPTION_KINDS.includes(Session.kind)) { Session.choose(Number(e.key) - 1); return; }
         if (/^[1-3]$/.test(e.key) && Session.kind === "card" && Session.s.current.revealed && !Session.s.answered) { Session.gradeCard([1, 3, 5][Number(e.key) - 1]); return; }

@@ -31,6 +31,7 @@ const ROOT = path.join(__dirname, "..");
 const DIR = process.env.FLUIDEZ_DIR ? path.resolve(process.env.FLUIDEZ_DIR) : path.join(ROOT, "progreso");
 const FILE = path.join(DIR, "fluidez-activa.json");
 const EXPORT_RE = /^english20-progreso-\d{4}-\d{2}-\d{2}.*\.json$/i;
+const SYNC_FILE = "app-estado.json";
 
 /* Rotación de temas: conversación amplia primero, trabajo después (objetivo: hablar de todo). */
 const TEMAS = {
@@ -47,7 +48,8 @@ const TEMAS = {
 const STATUS = { nueva: "nueva", uso: "en uso", activa: "activa" };
 
 /* ------------------------------------------------------------------ datos */
-function fresh() { return { version: 1, creado: Util.today(), chunks: {}, sesiones: [] }; }
+function fresh() { return { version: 1, creado: Util.today(), chunks: {}, sesiones: [], revisadas: [] }; }
+const prodKey = (p) => `${p.date}|${p.id}`;
 
 function load() {
   if (!fs.existsSync(FILE)) return fresh();
@@ -83,6 +85,9 @@ function statusOf(c) {
 function findExport() {
   const explicit = arg("--export") || process.env.FLUIDEZ_EXPORT;
   if (explicit) return fs.existsSync(explicit) ? explicit : fail(`No existe ${explicit}`);
+  // Con `npm start` la app guarda su estado aquí automáticamente: es la fuente más fresca.
+  const synced = path.join(DIR, SYNC_FILE);
+  if (fs.existsSync(synced)) return synced;
   if (process.env.FLUIDEZ_DIR) return null; // modo prueba: no buscar en las carpetas reales
   const home = os.homedir();
   const dirs = [ROOT, DIR, path.join(home, "Downloads"), path.join(home, "Descargas"), path.join(home, "OneDrive", "Escritorio"), path.join(home, "OneDrive", "Documentos"), path.join(home, "Desktop")];
@@ -170,8 +175,9 @@ function cmdEstado() {
   else if (exp.error) out.push(`## App: no pude leer ${exp.path} (${exp.error})`);
   else {
     const st = exp.state;
-    const age = Util.daysBetween(st.settings.lastExport || today, today);
-    out.push(`## App (copia: ${exp.path}${st.settings.lastExport ? `, del ${st.settings.lastExport}` : ""}${age > 7 ? " — ¡antigua! exporta una nueva" : ""})`);
+    const auto = path.basename(exp.path) === SYNC_FILE;
+    const age = auto ? 0 : Util.daysBetween(st.settings.lastExport || today, today);
+    out.push(`## App (${auto ? `sincronizada automáticamente: ${rel(exp.path)}` : `copia: ${exp.path}${st.settings.lastExport ? `, del ${st.settings.lastExport}` : ""}`}${age > 7 ? " — ¡antigua! exporta una nueva o usa npm start" : ""})`);
     out.push(`Nivel: ${String(st.settings.level).toUpperCase()} · sesiones en la app: ${st.sessions.length}`);
     const ranked = Errors.ranked(st.errors || {}, today).slice(0, 4);
     out.push("Errores recurrentes:");
@@ -189,6 +195,16 @@ function cmdEstado() {
     out.push("Palabras del banco aún no activas:");
     if (!weakBank.length) out.push("- (ninguna)");
     for (const { w, r } of weakBank) out.push(`- ${w.en} — ${w.es}${r && r.lapses ? ` · fallos en la app: ${r.lapses}` : ""}`);
+    // Retos de la app aún sin feedback del tutor: lo que de verdad dijo, con sus errores reales.
+    const done = new Set(d.revisadas || []);
+    const prods = (st.productions || []).filter((p) => !done.has(prodKey(p))).slice(-2).reverse();
+    out.push("Retos hablados de la app sin feedback (usa uno en el calentamiento):");
+    if (!prods.length) out.push("- (ninguno)");
+    for (const p of prods) {
+      out.push(`- [${p.date}|${p.id}] ${p.scenario}${p.social ? " (social)" : ""} · ${p.spoken ? `hablado ${p.secs} s, ${p.wpm} wpm` : "escrito"} · ${p.score} %`);
+      out.push(`  Reto: ${p.brief}`);
+      out.push(`  Dijo: "${p.text}"`);
+    }
   }
   console.log(out.join("\n"));
 }
@@ -246,9 +262,12 @@ function cmdRegistrar() {
       .map((k) => [k, Number(p.criterios && p.criterios[k])])
       .filter(([, v]) => Number.isFinite(v) && v >= 1 && v <= 5)),
     foco: Array.isArray(p.foco) ? p.foco.map(String).slice(0, 5) : [],
+    revisadas: Array.isArray(p.revisadas) ? p.revisadas.map(String).slice(0, 5) : [],
     logros: Array.isArray(p.logros) ? p.logros.map(String).slice(0, 5) : []
   });
   if (d.sesiones.length > 365) d.sesiones = d.sesiones.slice(-365);
+  // Retos de la app ya comentados ("AAAA-MM-DD|id"): no se vuelven a proponer.
+  if (Array.isArray(p.revisadas)) d.revisadas = [...new Set([...(d.revisadas || []), ...p.revisadas.map(String)])].slice(-200);
   save(d);
 
   const pend = Object.values(d.chunks).filter((c) => !c.enviadoApp).length;
