@@ -63,6 +63,7 @@ tests/              Tests del núcleo (node:test, sin dependencias)
 scripts/validate.js Validador del contenido (base y lotes, enlazados en index.html y sw.js)
 scripts/runway.js   Días de contenido nuevo que quedan en cada pool (npm run runway)
 scripts/serve.js    Servidor local con sincronización automática con progreso/ (npm start)
+scripts/onedrive.js Carpeta puente con el iPhone: OneDrive/English20
 scripts/fluidez.js  Progreso de la skill /fluidez-activa (estado · registrar · banco)
 scripts/nivel.js    Chequeos de nivel de /chequeo-nivel (estado · metricas · registrar)
 .claude/skills/     Skills fluidez-activa (tutor), chequeo-nivel (nivel de expresión) y generar-contenido (lotes)
@@ -111,6 +112,15 @@ El objetivo no es aprobar un examen, sino **expresarte con cualquier persona y e
 - **El foco cierra el círculo:** el criterio y la situación más débiles del último chequeo pasan a ser el foco de `/fluidez-activa`, que les dedica una ronda y orienta la elección de tema.
 - **En la app:** la tarjeta «Tu nivel de expresión» muestra tu nivel, tu posición en la escala con el objetivo (B2+), la evolución, los criterios, el mapa de situaciones, los puntos fuertes y débiles con su acción, y los indicadores. Importa `progreso/nivel-para-app-AAAA-MM-DD.json`: se añade y no reemplaza nada.
 - **Límites:** es una estimación con margen de ± medio nivel, no un certificado. La pronunciación no se evalúa, porque el dictado la convierte en texto.
+
+## En el iPhone (uso diario) y el puente con el ordenador
+
+1. **Instalar:** en **Safari**, abre https://alvarobogajo4.github.io/WEB-ENGLISH/ → Compartir → **«Añadir a pantalla de inicio»**. Se abre a pantalla completa y funciona sin conexión.
+2. **Sesión diaria:** desde el icono. El progreso se guarda en el iPhone.
+3. **Antes de una lección con el tutor** (`/fluidez-activa` en el ordenador, 2–3 veces por semana): en la app, **Exportar copia** → *Guardar en Archivos* → OneDrive → **English20**. El tutor busca primero en esa carpeta y usa la copia más reciente.
+4. **Después de la lección:** el tutor deja `banco-para-app-….json` (y `/chequeo-nivel`, `nivel-para-app-….json`) en **OneDrive/English20**. En el iPhone: **Importar copia** → Archivos → OneDrive → English20. Solo añade: no borra nada.
+
+Consejos: para hablar, el micrófono del teclado del iPhone suele reconocer mejor que el de la app. Para oír a Mark con acento australiano, descarga una voz en Ajustes → Accesibilidad → Contenido leído → Voces → Inglés (Australia).
 
 ## Ejecutar
 

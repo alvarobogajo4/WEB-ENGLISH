@@ -184,3 +184,29 @@ test("State: las rondas del 4/3/2 se guardan con la producción (máx. 3)", () =
   assert.deepEqual(s.productions[0].rounds, [95, 112, 130]);
   assert.deepEqual(State.normalize({ productions: [{ date: "2026-11-13", text: "x" }] }).productions[0].rounds, []);
 });
+
+/* --------------------------------------------- Puente con el iPhone (OneDrive) */
+test("puente OneDrive: el tutor lee la copia del móvil y le devuelve el banco en la misma carpeta", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fluidez-bridge-"));
+  const bridge = fs.mkdtempSync(path.join(os.tmpdir(), "english20-"));
+  const env = { ...process.env, FLUIDEZ_DIR: dir, E20_BRIDGE_DIR: bridge, FLUIDEZ_EXPORT: "" };
+  const run = (...args) => execFileSync(process.execPath, [path.join(ROOT, "scripts", "fluidez.js"), ...args], { env, encoding: "utf8" });
+  const st = { ...State.fresh(), sessions: [{ date: Util.today(), score: {} }], settings: { ...State.fresh().settings, lastExport: Util.today() } };
+  fs.writeFileSync(path.join(bridge, `english20-progreso-${Util.today()}.json`), JSON.stringify(State.toExport(st)));
+  assert.match(run("estado"), /copia del móvil en OneDrive\/English20/);
+  fs.writeFileSync(path.join(dir, "s.json"), JSON.stringify({ tema: "small-talk", nuevos: [{ en: "fair enough", es: "es razonable" }], resultados: [{ en: "fair enough", q: 4 }] }));
+  run("registrar", path.join(dir, "s.json"));
+  const out = run("banco");
+  assert.match(out, /En el iPhone: .*English20/);
+  const copies = fs.readdirSync(bridge).filter((n) => n.startsWith("banco-para-app-"));
+  assert.equal(copies.length, 1);
+  assert.equal(State.parseFile(fs.readFileSync(path.join(bridge, copies[0]), "utf8")).kind, "bank");
+});
+
+test("puente OneDrive: en modo prueba (FLUIDEZ_DIR sin E20_BRIDGE_DIR) nunca toca el OneDrive real", () => {
+  const prev = { F: process.env.FLUIDEZ_DIR, B: process.env.E20_BRIDGE_DIR };
+  process.env.FLUIDEZ_DIR = os.tmpdir(); delete process.env.E20_BRIDGE_DIR;
+  delete require.cache[require.resolve("../scripts/onedrive.js")];
+  try { assert.equal(require("../scripts/onedrive.js").bridgeDir(), null); }
+  finally { if (prev.F === undefined) delete process.env.FLUIDEZ_DIR; else process.env.FLUIDEZ_DIR = prev.F; if (prev.B !== undefined) process.env.E20_BRIDGE_DIR = prev.B; }
+});

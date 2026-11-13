@@ -34,7 +34,7 @@ Antes de empezar, lee [referencia.md](referencia.md): tiene los marcos de circun
 
 ### 0 · Arranque (1 min)
 
-1. Ejecuta `node scripts/fluidez.js estado`. Si el alumno te ha dado la ruta de una copia exportada de la app, añade `--export "<ruta>"`.
+1. Ejecuta `node scripts/fluidez.js estado`. El alumno usa la app en el iPhone y deja su copia en OneDrive/English20: si el estado dice que la copia es antigua (o que no hay), pídele en una línea que en la app pulse Exportar copia → Guardar en Archivos → OneDrive → English20, y vuelve a ejecutarlo. Si te da otra ruta, añade `--export "<ruta>"`.
 2. Con el resultado decide:
    - **Tema:** el que pase el alumno como argumento o, si no, el tema sugerido.
    - **Repaso:** hasta 5 chunks de "Repaso de producción" (los vencidos primero) y de "Nuevos aún sin producir".
@@ -141,7 +141,7 @@ Cuatro preguntas rápidas y personales en inglés, de una en una (*"What's the l
    - `foco`: 1–2 cosas concretas para la próxima sesión. `logros`: 1–2 cosas que ha conseguido hoy.
    - `revisadas`: las claves `AAAA-MM-DD|id` de los retos de la app que has comentado (así no se repiten). Omítelo si no hubo.
 2. Ejecuta `node scripts/fluidez.js registrar progreso/ultima-sesion.json`. Si da error, corrige el JSON y repite: el script no guarda nada mientras haya errores.
-3. Ejecuta `node scripts/fluidez.js banco`. Si el estado decía "sincronizada automáticamente", la app lo añadirá sola la próxima vez que la abra con `npm start`: díselo en una línea. Si no, dile que lo importe (Panel → Copia de seguridad → Importar copia) o que use `npm start` para no tener que hacerlo a mano.
+3. Ejecuta `node scripts/fluidez.js banco` y repite al alumno, en una línea, la instrucción que imprime el script (normalmente: en el iPhone, Importar copia → Archivos → OneDrive → English20).
 4. Resumen final, en español y en un máximo de 8 líneas: los chunks que ya son activos (★) según el script, el logro concreto de hoy, el foco de mañana y una frase de cierre en inglés.
 
 ## Escala de calidad (SM-2, la misma que usa la app)

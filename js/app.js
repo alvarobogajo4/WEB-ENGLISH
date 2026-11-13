@@ -1201,6 +1201,7 @@
           </div>
           ${Sync.on ? `<p class="mt-1.5 text-xs text-emerald-300/90 leading-relaxed">⟳ Sincronización automática con la carpeta <code class="font-mono">progreso/</code> activa: /fluidez-activa ve tus errores y retos, y lo que generan las skills entra solo en la app.</p>` : ""}
           ${Sync.note ? `<p class="mt-1.5 text-xs text-emerald-200">${Util.esc(Sync.note)}</p>` : ""}
+          <p class="mt-1.5 text-xs text-zinc-300 leading-relaxed"><strong>Para usar el tutor del ordenador:</strong> pulsa «Exportar copia» → <em>Guardar en Archivos</em> → OneDrive → carpeta <strong>English20</strong>. Lo que el tutor prepare para ti aparecerá en esa misma carpeta: impórtalo con «Importar copia».</p>
           <p class="mt-1.5 text-xs text-zinc-400 leading-relaxed">Tu progreso y tu banco de palabras solo se guardan en este navegador. Exporta un archivo de vez en cuando (Safari puede borrar los datos de webs que no abres en 7 días) o para pasarlos a otro dispositivo.${Sync.on ? "" : " Con <code class=\"font-mono\">npm start</code> la app se sincroniza sola con Claude Code."}</p>
           <div class="mt-4 flex flex-wrap gap-3">
             <button data-action="export" class="rounded-lg bg-zinc-100 px-4 py-2 text-xs font-semibold text-zinc-900 hover:bg-white transition">Exportar copia (.json)</button>
@@ -2001,14 +2002,33 @@
       const z = document.getElementById("backup-zone");
       if (z) z.innerHTML = `<p class="${tone}">${Util.esc(text)}</p>`;
     },
-    exportProgress() {
+    /* En el iPhone abre el menú Compartir: «Guardar en Archivos» → OneDrive → English20,
+     * y el tutor del ordenador la encuentra solo. Si no se puede compartir, descarga. */
+    async exportProgress() {
       Store.state.settings.lastExport = Util.today();
       Store.save();
       const data = JSON.stringify(C.State.toExport(Store.state), null, 2);
+      const name = `english20-progreso-${Util.today()}.json`;
+      let file = null;
+      try { file = new File([data], name, { type: "application/json" }); } catch (_) { file = null; }
+      if (file && navigator.canShare && navigator.share) {
+        let can = false;
+        try { can = navigator.canShare({ files: [file] }); } catch (_) { can = false; }
+        if (can) {
+          try {
+            await navigator.share({ files: [file], title: "Copia de English 20" });
+            this.go("home");
+            return this.backupMsg("Copia enviada. Si la guardaste en OneDrive → English20, el tutor del ordenador la encontrará solo.", "text-emerald-300");
+          } catch (e) {
+            if (e && e.name === "AbortError") { this.go("home"); return this.backupMsg("Envío cancelado: no se ha guardado ninguna copia.", "text-zinc-400"); }
+            /* otro error: se descarga como siempre */
+          }
+        }
+      }
       const url = URL.createObjectURL(new Blob([data], { type: "application/json" }));
       const a = document.createElement("a");
       a.href = url;
-      a.download = `english20-progreso-${Util.today()}.json`;
+      a.download = name;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       this.go("home");
