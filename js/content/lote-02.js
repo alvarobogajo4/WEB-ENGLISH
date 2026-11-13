@@ -5,7 +5,7 @@
 window.E20_DATA.addBatch("lote-02", {
   grammar: [
     { id: "G-042", domain: "people", topic: "Present perfect + for/since", level: "b2",
-      sentence: "I ___ at Fluidra since last spring, and I still learn something new every week.",
+      sentence: "I ___ at this company since last spring, and I still learn something new every week.",
       answer: "have been working", options: ["have been working", "am working", "work", "was working"],
       rule: "Algo que empezó en el pasado y sigue → present perfect (continuous) + since/for. Nunca presente: «I am working here since…» es un calco." },
     { id: "G-043", domain: "everyday", topic: "Make vs do", level: "b2",

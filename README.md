@@ -4,16 +4,19 @@ PWA de **20 minutos diarios** para pasar de **B1+/B2 a un inglés fluido (B2+ �
 
 Objetivo práctico: **conversar con naturalidad** (small talk, contar historias, opinar), **intervenir en reuniones sin bloquearse**, entender a los demás (acentos incluidos), hablar de datos con precisión y presentar ante 30–40 personas.
 
-## La sesión diaria
+## La sesión diaria (v2)
 
-| Bloque | Min | Qué entrenas | Contenido |
+Diseñada con las **cuatro áreas de Paul Nation** (estudiar la lengua, entender, expresarse y soltura). La v1 dedicaba unos 15 de los 20 minutos a reconocer (opción múltiple) y menos de 2 a hablar. Para alguien con buen vocabulario pasivo que se bloquea al hablar, era el reparto equivocado.
+
+| Bloque | Min | Qué entrenas | Cómo |
 |---|---|---|---|
-| **1 · Vocabulario & Conversación** | 01–05 | Small talk, reaccionar, contar historias y cambiar de tema. Frases para intervenir, aclarar o discrepar en reuniones. Vocabulario amplio y de HR Analytics | 36 frases de conversación, 30 de reunión, 40 de vocabulario amplio (phrasal verbs, expresiones, colocaciones), 24 términos de HR, 60 expresiones C1 y **tu banco personal**. En las frases de conversación y reunión, **primero la dices tú** y después ves las opciones |
-| **2 · Gramática en contexto** | 06–10 | Para hablar de datos (present perfect, condicionales, pasiva…) y para conversar y contar historias (used to, tiempos narrativos, wish, question tags…) | 56 frases con la regla en una línea, más 46 trampas del español (trabajo y vida diaria) |
-| **3 · Comprensión auditiva** | 11–15 | Entender a Mark (jefe, 🇦🇺), Sarah (🇬🇧) y Jake (🇺🇸) en reuniones, llamadas y charlas informales | 24 audios con 3 preguntas, transcripción y glosario (*arvo, reckon, yeah nah, snowed under…*). Al repasar un audio ya conocido, **dictado con huecos** |
-| **4 · Producción hablada** | 16–20 | Responder en voz alta como en la situación real | 23 retos: 1:1 con tu jefe, defender un dato, pedir entrar en un proyecto, presentar… y también contar tu fin de semana, una anécdota, explicar tu cultura u opinar en una cena |
+| **1 · Repaso exprés** | 00–04 | Lo que toca según la repetición espaciada: conversación, reuniones, vocabulario, gramática, una trampa del español y tu banco | 7–8 ítems. En las frases de conversación y reunión, **primero la dices tú** y después ves las opciones. Cada día entra además un ítem de un pool que rota (HR, colocaciones, vocabulario) |
+| **2 · Oído** | 04–08 | Entender a Mark (🇦🇺), Sarah (🇬🇧) y Jake (🇺🇸) | 1 audio: preguntas si es nuevo, **dictado con huecos** si ya lo conoces y, al final, **shadowing**: repetir cada frase justo detrás, imitando el ritmo |
+| **3 · Soltura 4/3/2** | 08–20 | Que las palabras salgan solas, sin traducir | Un reto (historia, opinión, 1:1, reunión…) contado **tres veces**, en 2:00, 1:30 y 1:00, con los mismos chunks. La app mide tu ritmo en cada ronda. Termina con la **revisión**: tu versión final frente a la modelo |
 
-Cada bloque tiene un reloj de referencia de 5 minutos. Si se acaba el tiempo, el bloque no se corta: el reloj pasa a ámbar y sigue contando.
+Cada bloque tiene un reloj de referencia. Si se acaba el tiempo, el bloque no se corta: el reloj pasa a ámbar y sigue contando.
+
+**Fuera de la app** (donde se gana el tiempo de verdad): 20–30 minutos diarios escuchando podcasts o series en inglés australiano o británico sobre temas que te gusten, y una conversación real a la semana (un profesor nativo, o tu 1:1 con Mark preparado con `/fluidez-activa`).
 
 ## Nivel B2 / C1
 
@@ -67,14 +70,13 @@ progreso/           Tus datos de fluidez activa (personales: fuera de git)
 package.json        Scripts: npm start · npm test · npm run validate · npm run check · npm run runway · npm run fluidez
 ```
 
-Cómo se forma la sesión (`SESSION_MIX` en `data_c1.js`):
+Cómo se forma la sesión (`SESSION_MIX` y `SESSION_ROTATION` en `data_c1.js`):
 
 | Bloque | Nivel B2 | Nivel C1 |
 |---|---|---|
-| Vocabulario | 2 conversación + 2 reunión + 2 vocabulario amplio + 1 HR + 1 colocación + hasta 2 de tu banco | 2 + 2 + 1 + 1 + 1 registro + 1 colocación + hasta 2 de tu banco |
-| Gramática | 5 gramática + 2 trampas | 4 + 2 |
-| Comprensión | 2 audios | 2 audios |
-| Producción | 1 reto | 1 reto |
+| Repaso exprés | 2 conversación + 1 reunión + 1 vocabulario amplio + 2 gramática + 1 trampa + 1 rotatorio (HR → colocación → vocabulario) + hasta 2 de tu banco | 1 + 1 + 1 registro + 1 colocación + 2 gramática + 1 trampa + 1 rotatorio (HR → vocabulario) + banco |
+| Oído | 1 audio | 1 audio |
+| Soltura 4/3/2 | 1 reto × 3 rondas | 1 reto × 3 rondas |
 
 ## Tutor de fluidez en Claude Code
 
@@ -181,7 +183,7 @@ El contenido crece **por lotes**: `npm run runway` dice qué pools se quedan sin
 
 ## Ideas para siguientes iteraciones
 
-- Shadowing: repetir en voz alta cada línea del audio y comparar con el dictado.
+- Shadowing con micro: comparar lo que repites con la frase original.
 - Colocaciones de nivel B2: hoy son todas C1, así que en B2 entran directamente las C1.
 - Audios con voz neural pregrabada (mp3) para un acento australiano real en cualquier navegador.
 - Plataforma: compilar Tailwind, fuentes locales, iconos PNG, CSP y despliegue en Pages.

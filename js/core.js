@@ -351,13 +351,15 @@
     },
 
     MAX_PRODUCTIONS: 30,
-    /* Respuesta a un reto: { date, id, scenario, brief, text, spoken, secs, wpm, score, social, reviewed } */
+    /* Respuesta a un reto: { date, id, scenario, brief, text, spoken, secs, wpm, score, social, reviewed, rounds }
+     * text/secs/wpm son de la versión final; rounds = wpm de cada ronda del 4/3/2 (0 = escrita). */
     normalizeProduction(p) {
       if (!isObj(p) || !isDate(p.date) || typeof p.text !== "string" || !p.text.trim()) return null;
       return {
         date: p.date, id: str(p.id, 40), scenario: str(p.scenario, 60), brief: str(p.brief, 400),
         text: str(p.text, 2000), spoken: !!p.spoken, secs: nonNeg(p.secs), wpm: nonNeg(p.wpm),
-        score: Math.min(100, nonNeg(p.score)), social: !!p.social, reviewed: !!p.reviewed
+        score: Math.min(100, nonNeg(p.score)), social: !!p.social, reviewed: !!p.reviewed,
+        rounds: Array.isArray(p.rounds) ? p.rounds.slice(0, 3).map(nonNeg) : []
       };
     },
 

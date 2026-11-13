@@ -60,7 +60,7 @@ Para cada chunk que toca repasar (máximo 5):
 
 Es lo único de la lección que parte de lo que el alumno **ya dijo de verdad** en la app (dictado, sin editar o poco editado).
 
-1. Enséñale en una línea qué dijo (un fragmento, no todo) y qué reto era.
+1. Enséñale en una línea qué dijo (un fragmento de su versión final, la de la ronda 3 del 4/3/2) y qué reto era. Si el script muestra el ritmo de las rondas, coméntalo en media línea: si subió, es soltura ganada; si bajó, que se fije en encadenar chunks.
 2. Feedback con el formato de la referencia: lo que comunicó bien, **máximo 2 correcciones** (las que más se notarían) y **la versión natural** de su idea en 2–3 frases, con 1–2 chunks que le habrían venido bien.
 3. Pídele que **vuelva a decir su respuesta** en 2–3 frases usando esa versión, sin leerla. Si le sale, ✅. Los chunks que le sugieras entran como `nuevos` con `"fuente": "reto-app"`.
 

@@ -48,6 +48,13 @@ for (const [lv, mix] of Object.entries(D.SESSION_MIX)) {
   }
 }
 
+for (const [k, m] of Object.entries(D.BLOCK_META)) if (!Number.isInteger(m.seconds) || m.seconds < 60) err(`BLOCK_META.${k}`, "falta seconds (duración de referencia del bloque)");
+for (const [pool, b] of Object.entries(D.POOL_BLOCK)) if (!D.BLOCK_META[b]) err(`POOL_BLOCK.${pool}`, `bloque desconocido "${b}"`);
+for (const [lv, pools] of Object.entries(D.SESSION_ROTATION || {})) {
+  if (!D.SESSION_MIX[lv]) err(`SESSION_ROTATION.${lv}`, "nivel desconocido");
+  for (const pool of pools) if (!D.BLOCKS[pool] || D.POOL_BLOCK[pool] !== "review") err(`SESSION_ROTATION.${lv}`, `"${pool}" no es un pool del repaso`);
+}
+
 /* ---- Comunes ---- */
 const seen = new Map();
 const ID_RE = /^[A-Z0-9]+-\d{3,}$/;

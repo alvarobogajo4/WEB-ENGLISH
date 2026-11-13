@@ -158,3 +158,29 @@ test("fluidez: usa app-estado.json, muestra los retos sin feedback y no repite l
   out = run("estado");
   assert.doesNotMatch(out, /B4-002\]/);
 });
+
+/* ------------------------------------------------------------ Sesión v2 */
+test("sesión v2: 3 bloques (repaso 4 · oído 4 · soltura 12) y todos los pools tienen bloque", () => {
+  const D = loadData();
+  assert.deepEqual(Object.keys(D.BLOCK_META), ["review", "listening", "fluency"]);
+  assert.equal(Object.values(D.BLOCK_META).reduce((a, m) => a + m.seconds, 0), 20 * 60);
+  for (const [pool, b] of Object.entries(D.POOL_BLOCK)) assert.ok(D.BLOCK_META[b], `${pool} → ${b}`);
+  for (const lv of ["b2", "c1"]) {
+    const review = Object.values(D.SESSION_MIX[lv].review).reduce((a, n) => a + n, 0);
+    assert.ok(review <= 8, `repaso ${lv}: ${review} ítems (máx. 8 para que quepa en 4 min)`);
+    assert.equal(D.SESSION_MIX[lv].fluency.challenges, 1);
+  }
+});
+
+test("sesión v2: hay retos B2 suficientes para la soltura 4/3/2 (≥ 3 semanas)", () => {
+  const D = loadData();
+  const b2 = D.BLOCKS.challenges.filter((c) => (c.level || D.POOL_DEFAULT_LEVEL.challenges) === "b2");
+  assert.ok(b2.length >= 20, `${b2.length} retos B2`);
+  assert.ok(b2.filter((c) => c.context === "social").length >= 6, "al menos 6 retos de vida diaria");
+});
+
+test("State: las rondas del 4/3/2 se guardan con la producción (máx. 3)", () => {
+  const s = State.normalize({ productions: [{ date: "2026-11-13", id: "B4-030", text: "Final version.", rounds: [95, 112, "130", 999, -4] }] });
+  assert.deepEqual(s.productions[0].rounds, [95, 112, 130]);
+  assert.deepEqual(State.normalize({ productions: [{ date: "2026-11-13", text: "x" }] }).productions[0].rounds, []);
+});

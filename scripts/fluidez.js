@@ -201,9 +201,9 @@ function cmdEstado() {
     out.push("Retos hablados de la app sin feedback (usa uno en el calentamiento):");
     if (!prods.length) out.push("- (ninguno)");
     for (const p of prods) {
-      out.push(`- [${p.date}|${p.id}] ${p.scenario}${p.social ? " (social)" : ""} · ${p.spoken ? `hablado ${p.secs} s, ${p.wpm} wpm` : "escrito"} · ${p.score} %`);
+      out.push(`- [${p.date}|${p.id}] ${p.scenario}${p.social ? " (social)" : ""} · ${p.spoken ? `hablado ${p.secs} s, ${p.wpm} wpm` : "escrito"} · ${p.score} %${p.rounds.some(Boolean) ? ` · ritmo 4/3/2: ${p.rounds.map((w) => w || "—").join(" → ")} wpm` : ""}`);
       out.push(`  Reto: ${p.brief}`);
-      out.push(`  Dijo: "${p.text}"`);
+      out.push(`  Dijo (versión final): "${p.text}"`);
     }
   }
   console.log(out.join("\n"));

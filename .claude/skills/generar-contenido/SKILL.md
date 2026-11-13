@@ -27,8 +27,8 @@ Tamaño por defecto: lo que pida el runway para 3 semanas, con un máximo de uno
 - **Frases de reunión y conversación:** `situation` en español, concreta. `answer` es lo que diría un nativo educado, en una o dos frases. La `note` explica el chunk y por qué funciona. En `meetingMoves`, sin *I think / maybe / kind of / basically* en la respuesta (el validador avisa).
 - **Listening:** 110–150 palabras, 4–6 líneas, **al menos dos líneas de 12+ palabras** (sirven para el dictado de repaso). Habla real: contracciones, *so / anyway / to be honest*, alguna autocorrección. Mark usa australianismos de verdad (*arvo, reckon, no worries, heaps, keen*) y van al glosario. 3 preguntas de comprensión **de sentido**, no de copiar una palabra. Glosario con 5–7 expresiones útiles.
 - **Trampas:** `wrong` es el calco real que haría el alumno; `alt` es otro error plausible; `trap` explica la trampa en una línea.
-- **Retos:** `mustUse` con regex que la `modelAnswer` cumpla, `framework` de 3–4 pasos, `selfCheck` de 3 preguntas, `context: "social"` si es informal.
-- **Privacidad:** nada de datos reales de la empresa del alumno.
+- **Retos (bloque de Soltura 4/3/2):** el alumno los cuenta **tres veces** (2:00, 1:30, 1:00), así que deben ser temas que se puedan volver a contar: una historia, una opinión con razón, un update, una explicación. Nada de respuestas de una frase. `modelAnswer` de 70–110 palabras (lo que cabe en 1 minuto), `mustUse` con 3 chunks y regex que la `modelAnswer` cumpla, `framework` de 3–4 pasos, `selfCheck` de 3 preguntas, `context: "social"` si es informal. Al menos la mitad, de vida diaria.
+- **Privacidad:** la web es pública (GitHub Pages). Nada de datos reales del alumno: ni su nombre, ni su empresa, ni su ciudad. Usa nombres genéricos (Alex, Sam) y "the company".
 
 ## 3 · Escribir el lote
 

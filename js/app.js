@@ -9,7 +9,7 @@
  *   Stats     → agregados para el panel (precisión, estrellas, errores recurrentes, nivel)
  *   Speech    → síntesis de voz (pronunciación y audios de listening, voz por hablante)
  *   Voice     → dictado (reconocimiento de voz) para el bloque de producción
- *   Session   → motor de la sesión de 20 min (4 bloques × 5 min)
+ *   Session   → motor de la sesión de 20 min (repaso 4 · oído 4 · soltura 4/3/2 12)
  *   Views     → render de pantallas (home, sesión, resumen)
  *   App       → arranque, delegación de eventos, atajos de teclado
  * ========================================================================== */
@@ -20,11 +20,15 @@
   const C = window.E20_CORE;
   if (!D || !C) { document.getElementById("app").textContent = `Error: no se pudo cargar ${!D ? "data_c1.js" : "core.js"}`; return; }
 
-  const BLOCK_ORDER = ["vocab", "grammar", "listening", "challenges"];
-  const BLOCK_SECONDS = 300;
+  const BLOCK_ORDER = ["review", "listening", "fluency"];
+  const blockSeconds = (k) => (D.BLOCK_META[k] && D.BLOCK_META[k].seconds) || 300;
+  /* Soltura 4/3/2 (Nation): el mismo mensaje tres veces con menos tiempo cada vez.
+   * La presión de tiempo con contenido ya conocido es lo que automatiza los chunks. */
+  const ROUNDS = [120, 90, 60];
+  const ROUND_MIN_WORDS = [15, 10, 10];
   const CUSTOM_PER_SESSION = 2;
-  const ERRORS_PER_BLOCK = 6; // ítems por bloque en el repaso de errores
-  const ERROR_BLOCKS = ["vocab", "grammar"]; // bloques rápidos donde se repasan los patrones
+  const ERRORS_PER_BLOCK = 10; // ítems en el repaso de errores
+  const ERROR_BLOCKS = ["review"]; // bloque rápido donde se repasan los patrones
   const OPTION_KINDS = ["register", "gap", "move", "trap"];
   const PRODUCE_KINDS = ["move", "register"]; // ítems con «dilo antes de verlo»
   const POOL_KIND = {
@@ -525,10 +529,17 @@
             const count = mode === "full" ? n : Math.ceil(n * 1.5);
             entries.push(...SRS.pick(pool, count, level, false, weak).map((it) => ({ pool, kind: POOL_KIND[pool], it })));
           }
-          if (k === "vocab") {
+          if (k === "review") {
+            // Pool rotatorio del día (HR, colocaciones…): 1 ítem más, distinto cada día.
+            const rot = (D.SESSION_ROTATION || {})[level] || [];
+            if (rot.length) {
+              const pool = rot[((Util.daysBetween("2026-01-01", Util.today()) % rot.length) + rot.length) % rot.length];
+              const have = new Set(entries.map((e) => e.it.id));
+              entries.push(...SRS.pick(pool, 1, level, false, weak).filter((it) => !have.has(it.id)).map((it) => ({ pool, kind: POOL_KIND[pool], it })));
+            }
             entries.push(...SRS.pick("custom", CUSTOM_PER_SESSION, level, true).map((it) => ({ pool: "custom", kind: "card", it })));
           }
-          queue[k] = k === "listening" || k === "challenges" ? entries : Util.shuffle(entries);
+          queue[k] = k === "listening" || k === "fluency" ? entries : Util.shuffle(entries);
         }
       }
       const usable = Object.keys(queue).filter((k) => queue[k].length);
@@ -590,7 +601,7 @@
     restore() {
       let snap = null;
       try { snap = JSON.parse(sessionStorage.getItem(this.SNAP_KEY) || "null"); } catch (_) { snap = null; }
-      if (!snap || snap.day !== Util.today() || !snap.queue) { this.clearSnapshot(); return false; }
+      if (!snap || snap.day !== Util.today() || !snap.queue || !Array.isArray(snap.blocks) || snap.blocks.some((b) => !D.BLOCK_META[b])) { this.clearSnapshot(); return false; }
       const find = (r) => {
         const it = Content.pool(r.pool).find((x) => x.id === r.id);
         return it ? { pool: r.pool, kind: r.kind, it } : null;
@@ -647,7 +658,7 @@
       if (kind === "trap")      c.options = Util.shuffle([it.right, it.wrong, it.alt]);
       // «Dilo antes de verlo»: primero produces y después eliges.
       if (PRODUCE_KINDS.includes(kind) && Store.state.settings.produceFirst && this.s.mode !== "errors") Object.assign(c, { phase: "produce", text: "", voice: { ms: 0, words: 0 } });
-      if (kind === "challenge") Object.assign(c, { text: "", evaluated: false, checks: it.selfCheck.map(() => false), voice: { ms: 0, words: 0 } });
+      if (kind === "challenge") Object.assign(c, { text: "", evaluated: false, checks: it.selfCheck.map(() => false), voice: { ms: 0, words: 0 }, round: 1, rounds: [] });
       if (kind === "listen") {
         Object.assign(c, { answers: it.questions.map(() => null), plays: 0, rate: 1 });
         // Audio ya trabajado → dictado con huecos (las preguntas ya se recordarían de memoria).
@@ -674,9 +685,10 @@
     startTimer() { this.stopTimer(); this.timerId = setInterval(() => Views.updateTimer(), 1000); },
     stopTimer() { if (this.timerId) clearInterval(this.timerId); this.timerId = null; },
     remaining() {
-      if (!this.s || !this.s.blockStartedAt) return BLOCK_SECONDS;
+      const total = blockSeconds(this.s ? this.blockKey : null);
+      if (!this.s || !this.s.blockStartedAt) return total;
       const now = this.s.pausedAt || Date.now();
-      return BLOCK_SECONDS - Math.floor((now - this.s.blockStartedAt) / 1000);
+      return total - Math.floor((now - this.s.blockStartedAt) / 1000);
     },
 
     /* Respuesta en ítems de opción múltiple. */
@@ -805,11 +817,25 @@
       return this.item.mustUse.map((u) => new RegExp(u.m, "i").test(text));
     },
 
+    /* Cierra la ronda actual del 4/3/2. Tras la 3.ª llega la revisión (evaluated). */
     evaluateChallenge() {
       const c = this.s.current;
       if (c.evaluated) return;
       Voice.stop(() => {
-        if (Session.s && Session.s.current === c && !c.evaluated) { c.evaluated = true; Views.render(); }
+        if (!Session.s || Session.s.current !== c || c.evaluated) return;
+        const ta = document.getElementById("challenge-text");
+        if (ta) c.text = ta.value;
+        const spoken = c.voice.ms >= 5000;
+        c.rounds = [...(c.rounds || []), {
+          text: c.text, secs: Math.round(c.voice.ms / 1000), words: Util.words(c.text),
+          wpm: spoken ? Math.round(c.voice.words / (c.voice.ms / 60000)) : null
+        }];
+        if ((c.round || 1) < ROUNDS.length) {
+          c.round = (c.round || 1) + 1;
+          c.text = "";
+          c.voice = { ms: 0, words: 0 };
+        } else c.evaluated = true;
+        Views.render();
       });
     },
 
@@ -854,7 +880,7 @@
       const p = C.State.normalizeProduction({
         date: Util.today(), id: it.id, scenario: D.SCENARIOS[it.scenario] || it.scenario, brief: it.brief, text: c.text,
         spoken, secs: spoken ? Math.round(c.voice.ms / 1000) : 0, wpm: spoken ? Math.round(c.voice.words / (c.voice.ms / 60000)) : 0,
-        score: c.finalScore, social: it.context === "social"
+        score: c.finalScore, social: it.context === "social", rounds: (c.rounds || []).map((r) => r.wpm || 0)
       });
       if (!p) return;
       Store.state.productions = [...Store.state.productions, p].slice(-C.State.MAX_PRODUCTIONS);
@@ -1190,11 +1216,11 @@
         <div class="rounded-2xl border border-zinc-800 bg-gradient-to-br from-zinc-900 to-zinc-950 p-6 sm:p-8">
           <div class="flex flex-wrap items-start justify-between gap-6">
             <div class="max-w-md">
-              <p class="font-mono text-xs uppercase tracking-[0.2em] text-zinc-500">Sesión diaria · 4 bloques × 5 min</p>
+              <p class="font-mono text-xs uppercase tracking-[0.2em] text-zinc-500">Sesión diaria · repaso 4 · oído 4 · soltura 12 min</p>
               <h1 class="mt-2 text-2xl sm:text-3xl font-semibold tracking-tight text-zinc-50">${st.doneToday ? "Sesión de hoy completada." : "Tus 20 minutos de hoy."}</h1>
               <p class="mt-2 text-sm text-zinc-400 leading-relaxed">${st.doneToday
                 ? "Puedes repetir otra sesión o reforzar un bloque concreto. El repaso espaciado prioriza lo que fallas."
-                : "Conversación y frases para reuniones, vocabulario amplio, gramática en contexto, comprensión con tu jefe australiano y producción hablada."}</p>
+                : "Un repaso exprés de lo que toca, entrenar el oído con Mark, Sarah y Jake, y la mayor parte del tiempo hablando: el mismo mensaje tres veces, cada vez con más soltura."}</p>
             </div>
             <div class="flex gap-6">
               <div><div class="text-[11px] uppercase tracking-wider text-zinc-500">Racha</div>
@@ -1263,7 +1289,7 @@
 
         <div>
           <h2 class="text-sm font-semibold text-zinc-200 mb-3">Refuerzo por bloque <span class="font-normal text-zinc-500">· no cuenta para la racha</span></h2>
-          <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">${drillBtns}</div>
+          <div class="grid gap-3 sm:grid-cols-3">${drillBtns}</div>
         </div>
 
         ${backupCard}
@@ -1302,7 +1328,7 @@
           <div class="flex items-center justify-between gap-3">
             <button data-action="abort" class="text-xs text-zinc-400 hover:text-zinc-100 transition">✕ Salir <kbd class="hidden sm:inline font-mono text-[10px] text-zinc-500">Esc</kbd></button>
             <span class="font-mono text-[11px] ${a.text}">BLOQUE ${m.n} · MIN ${m.minutes}</span>
-            <div id="timer" class="font-mono text-sm tabular-nums text-zinc-300 w-14 text-right">${s.phase === "item" ? Util.mmss(S.remaining()) : "05:00"}</div>
+            <div id="timer" class="font-mono text-sm tabular-nums text-zinc-300 w-14 text-right">${Util.mmss(S.remaining())}</div>
           </div>
           <div id="exit-ask" role="alertdialog" aria-label="Confirmar salida" class="hidden mt-3 rounded-xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
             <p>¿Salir de la sesión? Lo que ya has respondido cuenta para tus repasos, pero la sesión no se guarda ni suma racha.</p>
@@ -1324,30 +1350,27 @@
 
     blockIntro(k) {
       const m = D.BLOCK_META[k], a = accentOf(k), n = Session.blockLength;
-      const unit = { vocab: "ítems", grammar: "frases", listening: n === 1 ? "audio" : "audios", challenges: n === 1 ? "reto" : "retos" }[k];
+      const unit = { review: "ítems", listening: n === 1 ? "audio" : "audios", fluency: n === 1 ? "reto" : "retos" }[k];
       const errMode = Session.s.mode === "errors";
       const errLabels = errMode
         ? [...new Set(Session.s.queue[k].map((e) => Content.patternOf(e.pool, e.it).label))].join(", ")
         : "";
       const how = {
-        vocab: `Frases para conversar y para intervenir en reuniones, vocabulario amplio (phrasal verbs, expresiones, colocaciones), HR Analytics y, si toca, palabras de tu banco personal. Ojo: todas las opciones pueden ser gramaticales. Elige la que diría un nativo en esa situación.${Store.state.settings.produceFirst ? " En las frases de conversación y reunión, primero dila tú (hablando o escribiendo) y después verás las opciones: así pasa de reconocerla a que te salga." : ""}`,
-        grammar: "Completa cada frase con la estructura correcta. Son frases de tu trabajo y la regla aparece en una línea. También salen las trampas típicas del español.",
+        review: `Repaso rápido de lo que toca según tu calendario: frases de conversación y de reunión, vocabulario, gramática en contexto, una trampa del español y tu banco. Todas las opciones pueden ser gramaticales: elige la que diría un nativo.${Store.state.settings.produceFirst ? " En las frases de conversación y reunión, primero dila tú y después verás las opciones." : ""} Ve rápido: el tiempo fuerte de hoy es hablar.`,
         listening: Speech.supported
-          ? "Escucha y responde. Puedes repetir el audio y ponerlo más lento. Mark habla con acento australiano. Intenta responder sin mirar la transcripción: aparece al final. Los audios que ya conoces vuelven como dictado: escuchas una frase y escribes las palabras que faltan."
+          ? "Escucha y responde sin mirar la transcripción (puedes repetir y ponerlo más lento). Los audios que ya conoces vuelven como dictado. Al final, shadowing: reproduce cada frase y repítela en voz alta justo detrás, imitando el ritmo. Así tu oído y tu boca aprenden el inglés encadenado."
           : "Tu navegador no puede reproducir voz, así que verás la transcripción para leer. Para escuchar, usa Chrome, Edge o Safari.",
-        challenges: Voice.supported
-          ? `Lee el escenario y responde en voz alta, como en la situación real (60–90 s). Tu voz se transcribe y luego puedes corregir el texto. Usa los chunks obligatorios.</p><p class="mt-2 text-xs text-zinc-400">${PRIVACY_NOTE}`
-          : "Lee el escenario y escribe tu respuesta (≈ 60–100 palabras). Usa los chunks obligatorios. Para responder hablando, abre la app en Chrome, Edge o Safari."
+        fluency: `Técnica 4/3/2: vas a contar lo mismo <strong>tres veces</strong>, en 2:00, 1:30 y 1:00, con los mismos chunks. La primera vez buscas las palabras; la segunda ya las tienes; la tercera salen solas y más rápido. Eso es exactamente la soltura. No leas lo que dijiste antes: vuelve a decirlo. Al final comparas tu última versión con la modelo.${Voice.supported ? "" : " Tu navegador no dicta: escribe cada ronda (o usa el micrófono del teclado)."}</p><p class="mt-2 text-xs text-zinc-400">${PRIVACY_NOTE}`
       }[k];
       return `
         <div class="rounded-2xl border ${a.border} ${a.soft} p-6 sm:p-8">
-          <div class="font-mono text-xs ${a.text}">${errMode ? "REPASO DE ERRORES" : `BLOQUE ${m.n} DE 4`} · ${n} ${unit} · NIVEL ${Session.s.level.toUpperCase()}</div>
+          <div class="font-mono text-xs ${a.text}">${errMode ? "REPASO DE ERRORES" : `BLOQUE ${m.n} DE ${BLOCK_ORDER.length}`} · ${n} ${unit} · NIVEL ${Session.s.level.toUpperCase()}</div>
           <h2 class="mt-2 text-2xl font-semibold tracking-tight text-zinc-50">${m.title}</h2>
           <p class="mt-1 text-sm text-zinc-400">${m.subtitle}</p>
           <p class="mt-5 text-sm leading-relaxed text-zinc-300">${errMode
             ? `Solo ítems de tus patrones de error activos: ${Util.esc(errLabels)}. Fíjate en por qué fallaste antes. El patrón queda superado con 3 aciertos seguidos, el último en un día posterior al último fallo (hoy entrenas, otro día lo confirmas).`
             : how}</p>
-          <p class="mt-3 text-xs text-zinc-500">Tienes 5 minutos de referencia. Si se acaba el tiempo no se corta el bloque, pero lo verás en el reloj.</p>
+          <p class="mt-3 text-xs text-zinc-500">Tienes ${Math.round(blockSeconds(k) / 60)} minutos de referencia. Si se acaba el tiempo no se corta el bloque, pero lo verás en el reloj.</p>
         </div>
         ${this.footer(`Empezar bloque ${m.n}`, true)}`;
     },
@@ -1356,7 +1379,7 @@
       const m = D.BLOCK_META[k], a = accentOf(k), r = Session.s.results[k];
       const p = Util.pct(r.ok, r.total) ?? 0;
       const last = Session.s.blockIdx + 1 >= Session.s.blocks.length;
-      const used = BLOCK_SECONDS - Session.remaining();
+      const used = blockSeconds(k) - Session.remaining();
       return `
         <div class="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-8 text-center">
           <div class="font-mono text-xs ${a.text}">BLOQUE ${m.n} COMPLETADO</div>
@@ -1502,6 +1525,18 @@
         ${this.footer("Siguiente", S.s.answered)}`;
     },
 
+    /* Shadowing: cada frase con su voz; se repite en voz alta justo detrás. */
+    shadowPanel(it) {
+      if (!Speech.supported) return "";
+      return `<div class="rounded-xl border border-violet-400/20 bg-violet-400/5 p-5 space-y-3 fade-in">
+          <div class="text-[11px] uppercase tracking-wider text-violet-300">Shadowing · 1 minuto</div>
+          <p class="text-xs text-zinc-400">Pulsa ▶, escucha la frase y repítela en voz alta justo detrás, imitando ritmo, pausas y entonación (no la pronunciación de cada palabra). Dos veces cada una. Luego prueba en «Lento» si alguna se te atraganta.</p>
+          <ol class="space-y-2">${it.lines.map((l) => { const sp = D.SPEAKERS[l.who] || {}; return `<li class="flex items-start gap-3 text-sm">
+            <button type="button" data-action="speak" data-shadow="1" data-text="${Util.esc(l.text)}" data-lang="${sp.lang || ""}" class="shrink-0 rounded-md border border-violet-400/40 px-2 py-1 text-xs text-violet-200 hover:bg-violet-400/10" aria-label="Escuchar la frase">▶</button>
+            <span class="text-zinc-200"><span class="font-semibold ${sp.color || ""}">${sp.name || ""}:</span> ${Util.esc(l.text)}</span></li>`; }).join("")}</ol>
+        </div>`;
+    },
+
     /* Repaso de un audio: dictado con huecos sobre una frase. */
     item_dictation() {
       const S = Session, it = S.item, c = S.s.current, done = S.s.answered;
@@ -1538,6 +1573,7 @@
         </div>
         ${done ? `<div class="mb-5 text-sm ${okCount === c.dict.gaps.length ? "text-emerald-300" : "text-zinc-300"}">${okCount}/${c.dict.gaps.length} huecos. ${okCount === c.dict.gaps.length ? "Oído fino." : "Vuelve a escuchar la frase leyéndola: fíjate en cómo se unen las palabras."}</div>` : ""}
         ${transcript}
+        ${done ? `<div class="mt-5">${this.shadowPanel(it)}</div>` : ""}
         ${done ? this.footer("Siguiente", true) : this.footer("Comprobar", true, "check-dictation")}`;
     },
 
@@ -1599,7 +1635,7 @@
         </div>
         <div class="space-y-5">${questions}</div>
         ${done ? `<div class="mt-5 text-sm ${okCount === it.questions.length ? "text-emerald-300" : "text-zinc-300"}">${okCount}/${it.questions.length} correctas. ${okCount === it.questions.length ? "Perfecto." : "Escúchalo otra vez leyendo la transcripción: así es como se entrena el oído."}</div>` : ""}
-        <div class="mt-5 space-y-5">${transcript}${glossary}</div>
+        <div class="mt-5 space-y-5">${transcript}${done ? this.shadowPanel(it) : ""}${glossary}</div>
         ${this.footer("Siguiente", done, "next", done ? "" : "Responde las 3 preguntas")}`;
     },
 
@@ -1653,12 +1689,23 @@
             <div class="flex items-center justify-between gap-3"><div class="text-[11px] uppercase tracking-wider text-emerald-400">Respuesta modelo</div>${this.speakBtn(it.modelAnswer)}</div>
             <p class="text-[15px] leading-relaxed text-zinc-100">${this.highlight(it.modelAnswer, it.mustUse.map((u) => u.t))}</p>
           </div>
+          ${this.roundsVerdict(c)}
           ${this.deliveryPanel(c)}
           ${S.s.answered ? `<div class="text-center text-sm text-zinc-300">Puntuación del reto: <span class="font-semibold tabular-nums ${c.finalScore >= 60 ? "text-emerald-400" : "text-amber-400"}">${c.finalScore}%</span> <span class="text-zinc-500">(50% chunks · 50% rúbrica)</span></div>` : ""}
         </div>` : "";
 
+      const round = c.round || 1, minW = ROUND_MIN_WORDS[round - 1] || 10;
+      const ROUND_TIP = ["Cuéntalo con calma: busca las palabras y usa los chunks.", "Lo mismo, más directo: mismas ideas y mismos chunks, menos pausas.", "Versión final: solo lo esencial, al ritmo de una reunión."];
+      const roundBar = `<div class="mb-4 rounded-xl border border-emerald-400/25 bg-emerald-400/5 px-4 py-3">
+          <div class="flex flex-wrap items-baseline justify-between gap-2">
+            <span class="text-sm font-semibold text-emerald-200">${c.evaluated ? "Revisión" : `Ronda ${round} de ${ROUNDS.length} · objetivo ${Util.mmss(ROUNDS[round - 1])}`}</span>
+            <span class="flex gap-1.5">${ROUNDS.map((sec, i) => `<span class="rounded px-1.5 py-0.5 font-mono text-[10px] ${i + 1 < round || c.evaluated ? "bg-emerald-400/20 text-emerald-200" : i + 1 === round ? "bg-zinc-100 text-zinc-900" : "bg-zinc-800 text-zinc-500"}">${Util.mmss(sec)}</span>`).join("")}</span>
+          </div>
+          ${c.evaluated ? "" : `<p class="mt-1 text-xs text-zinc-400">${ROUND_TIP[round - 1]}</p>`}
+          ${(c.rounds || []).length ? `<div class="mt-2 flex flex-wrap gap-2 text-[11px] text-zinc-400">${c.rounds.map((r, i) => `<span class="rounded-md bg-zinc-950/60 px-2 py-1 tabular-nums">R${i + 1} · ${r.secs ? Util.mmss(r.secs) : "escrita"} · ${r.words} palabras${r.wpm ? ` · <span class="text-zinc-200">${r.wpm} wpm</span>` : ""}</span>`).join("")}</div>` : ""}
+        </div>`;
       let footerBtn;
-      if (!c.evaluated) footerBtn = this.footer("Evaluar respuesta", words >= 15, "evaluate", words >= 15 ? "" : `${words}/15 palabras mínimo`);
+      if (!c.evaluated) footerBtn = this.footer(round < ROUNDS.length ? `Terminar ronda ${round}` : "Terminar y revisar", words >= minW, "evaluate", words >= minW ? "" : `${words}/${minW} palabras mínimo`);
       else if (!S.s.answered) footerBtn = this.footer("Registrar y continuar", true, "finish-challenge");
       else footerBtn = this.footer("Siguiente", true);
 
@@ -1674,12 +1721,28 @@
             <div id="chips" class="flex flex-wrap gap-1.5">${chips}</div>
           </div>
         </div>
+        ${roundBar}
         ${c.evaluated ? "" : this.voiceControls()}
         <textarea id="challenge-text" ${c.evaluated ? "readonly" : ""} rows="7" spellcheck="true" lang="en" placeholder="${Voice.supported ? "Pulsa «Responder hablando» o escribe tu respuesta en inglés…" : "Write your answer in English…"}"
           class="w-full rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 text-[15px] leading-relaxed text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-400/40 ${c.evaluated ? "opacity-80" : ""}">${Util.esc(c.text)}</textarea>
-        <div class="mt-1.5 flex justify-between text-xs text-zinc-500"><span id="word-count" class="tabular-nums">${words} palabras</span><span>Objetivo: 60–100</span></div>
+        <div class="mt-1.5 flex justify-between text-xs text-zinc-500"><span id="word-count" class="tabular-nums">${words} palabras</span><span>${c.evaluated ? "Tu versión final (ronda 3)" : `Objetivo: ${Util.mmss(ROUNDS[round - 1])} hablando`}</span></div>
         ${evalPanel}
         ${footerBtn}`;
+    },
+
+    /* Qué ha cambiado entre la ronda 1 y la 3: la prueba de que gana soltura. */
+    roundsVerdict(c) {
+      const r = c.rounds || [];
+      if (r.length < 2) return "";
+      const first = r[0], last = r[r.length - 1];
+      let msg;
+      if (first.wpm && last.wpm) {
+        const d = last.wpm - first.wpm;
+        msg = d >= 10 ? `Tu ritmo subió de ${first.wpm} a ${last.wpm} wpm con el mismo mensaje: eso es soltura ganada.`
+          : d >= 0 ? `Ritmo estable (${first.wpm} → ${last.wpm} wpm). Mañana intenta que la ronda 3 suene más seguida: menos pausas, mismos chunks.`
+          : `La ronda 3 fue más lenta (${first.wpm} → ${last.wpm} wpm). Normal si buscabas palabras: repite el reto otro día y apunta a encadenar.`;
+      } else msg = `Has pasado de ${first.words} a ${last.words} palabras. Respondiendo en voz alta verás también tu ritmo.`;
+      return `<div class="rounded-xl border border-emerald-400/25 bg-emerald-400/5 p-4 text-sm text-emerald-100">${msg}</div>`;
     },
 
     footer(label, enabled, action = "next", hint = "") {
@@ -1760,10 +1823,11 @@
         chip.textContent = `${hits[i] ? "✓ " : ""}${u.t}`;
       });
       const btn = document.getElementById("primary-btn"), hint = document.getElementById("footer-hint");
-      const ok = words >= 15;
+      const minW = ROUND_MIN_WORDS[(c.round || 1) - 1] || 10;
+      const ok = words >= minW;
       btn.disabled = !ok;
       btn.className = `w-full sm:w-auto rounded-xl px-6 py-3.5 text-sm font-semibold transition ${ok ? "bg-zinc-50 text-zinc-950 hover:bg-white active:scale-[.99]" : "bg-zinc-800 text-zinc-500 cursor-not-allowed"}`;
-      hint.textContent = ok ? "" : `${words}/15 palabras mínimo`;
+      hint.textContent = ok ? "" : `${words}/${minW} palabras mínimo`;
     },
 
     voiceControls(type = "challenge") {
@@ -1792,13 +1856,16 @@
         btn.className = "inline-flex items-center gap-2 rounded-xl border border-rose-400/60 bg-rose-500/15 px-4 py-2.5 text-sm font-medium text-rose-100 hover:bg-rose-500/25 transition";
         btn.innerHTML = `<span class="relative flex w-2.5 h-2.5"><span class="absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75 animate-ping"></span><span class="relative inline-flex w-2.5 h-2.5 rounded-full bg-rose-500"></span></span>Detener`;
         status.className = "text-xs tabular-nums text-rose-200";
-        status.textContent = `Grabando ${Util.mmss(secs)} · habla en inglés (${accent})`;
+        status.textContent = isChallenge
+          ? `Grabando ${Util.mmss(secs)} / ${Util.mmss(ROUNDS[(c.round || 1) - 1])} · ${accent}`
+          : `Grabando ${Util.mmss(secs)} · habla en inglés (${accent})`;
+        status.className = `text-xs tabular-nums ${isChallenge && secs > ROUNDS[(c.round || 1) - 1] ? "text-amber-300" : "text-rose-200"}`;
       } else {
         btn.className = "inline-flex items-center gap-2 rounded-xl border border-emerald-400/40 bg-emerald-400/10 px-4 py-2.5 text-sm font-medium text-emerald-100 hover:bg-emerald-400/20 transition";
         btn.innerHTML = `${mic}${c.voice && c.voice.ms > 0 ? "Seguir hablando" : isChallenge ? "Responder hablando" : "Decirlo"}`;
         if (Voice.error) { status.className = "text-xs text-rose-300"; status.textContent = Voice.error; }
         else if (ms > 0) { status.className = "text-xs tabular-nums text-zinc-400"; status.textContent = isChallenge ? `Has hablado ${Util.mmss(secs)}. Revisa la transcripción y corrige lo que haga falta.` : "Listo. Pulsa Enter para seguir."; }
-        else { status.className = "text-xs text-zinc-500"; status.textContent = isChallenge ? "Objetivo: 60–90 s" : "Una frase basta"; }
+        else { status.className = "text-xs text-zinc-500"; status.textContent = isChallenge ? `Ronda ${c.round || 1}: habla ${Util.mmss(ROUNDS[(c.round || 1) - 1])}` : "Una frase basta"; }
       }
       if (ta && !c.evaluated && !c.locked) {
         ta.readOnly = Voice.active;
@@ -1819,9 +1886,9 @@
         const [tone, verdict] = wpm < 100 ? ["text-amber-300", "Lento: gana fluidez encadenando chunks completos."]
           : wpm > 170 ? ["text-amber-300", "Rápido: en una reunión, las pausas transmiten control."]
           : ["text-emerald-300", "Buen ritmo profesional (110–160 wpm)."];
-        const len = secs < 45 ? "Algo corto para el reto: apunta a 60–90 s."
-          : secs > 120 ? (social ? "Largo: en una charla, deja hueco para que el otro participe." : "Largo: en dirección se premia la síntesis.")
-          : "Duración adecuada.";
+        const len = secs < 40 ? "Algo corto para la ronda final: apunta a cerca de 1 minuto."
+          : secs > 75 ? (social ? "Te has pasado del minuto: en una charla, deja hueco al otro." : "Te has pasado del minuto: en dirección se premia la síntesis.")
+          : "Duración adecuada para la ronda final.";
         pace = `<div class="grid grid-cols-2 gap-3">
             <div class="rounded-lg bg-zinc-950/60 px-3 py-2.5"><div class="text-[11px] uppercase tracking-wider text-zinc-500">Tiempo hablado</div><div class="mt-0.5 text-lg font-semibold tabular-nums text-zinc-100">${Util.mmss(secs)}</div></div>
             <div class="rounded-lg bg-zinc-950/60 px-3 py-2.5"><div class="text-[11px] uppercase tracking-wider text-zinc-500">Ritmo</div><div class="mt-0.5 text-lg font-semibold tabular-nums ${tone}">${wpm} <span class="text-xs font-normal text-zinc-500">wpm</span></div></div>
@@ -2036,7 +2103,12 @@
             break;
           case "import-no": this.pendingImport = null; this.backupMsg(""); break;
           case "dismiss-recovered": Store.dismissRecovered(); this.go("home"); break;
-          case "speak": Speech.say(el.dataset.text, { lang: el.dataset.lang || undefined }); break;
+          case "speak": {
+            // En el shadowing se respeta la velocidad elegida (Normal / Lento).
+            const rate = el.dataset.shadow && Session.s && Session.s.current && Session.s.current.rate ? Session.s.current.rate * 0.95 : undefined;
+            Speech.say(el.dataset.text, { lang: el.dataset.lang || undefined, ...(rate ? { rate } : {}) });
+            break;
+          }
           case "mic": Voice.toggle(); break;
           case "level": Store.state.settings.level = el.dataset.level; Store.save(); this.go("home"); break;
           case "add-gloss":

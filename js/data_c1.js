@@ -4,12 +4,11 @@
  * Solo datos, sin lógica. Se expone en window.E20_DATA para que funcione tanto
  * abriendo index.html con doble clic (file://) como servido por HTTP.
  *
- * SESIÓN DIARIA (20 min) — cada bloque se alimenta de varios "pools":
- *   1 Vocabulario  ← meetingMoves, conversation, everydayVocab, hrVocab, registerUpgrade,
- *                  collocations, + tu banco personal
- *   2 Gramática    ← grammar, traps
- *   3 Comprensión  ← listening
- *   4 Producción   ← challenges
+ * SESIÓN DIARIA (20 min, v2 · las cuatro áreas de Nation) — cada bloque se alimenta de varios "pools":
+ *   1 Repaso exprés (4 min)  ← meetingMoves, conversation, everydayVocab, hrVocab, registerUpgrade,
+ *                              collocations, grammar, traps + tu banco personal
+ *   2 Oído (4 min)           ← listening (preguntas o dictado + shadowing)
+ *   3 Soltura 4/3/2 (12 min) ← challenges (el mismo reto 3 veces: 2:00 → 1:30 → 1:00, y revisión)
  *
  * REGLAS PARA AÑADIR CONTENIDO
  *  - Cada ítem necesita un `id` único y ESTABLE (el progreso se guarda por id).
@@ -46,28 +45,34 @@ window.E20_DATA = {
   },
 
   BLOCK_META: {
-    vocab:      { n: 1, minutes: "01–05", title: "Vocabulario & Conversación", subtitle: "Frases para conversar y para reuniones, vocabulario amplio y tu banco personal", accent: "amber" },
-    grammar:    { n: 2, minutes: "06–10", title: "Gramática en contexto",   subtitle: "Las estructuras para hablar de datos, opinar y contar historias", accent: "sky" },
-    listening:  { n: 3, minutes: "11–15", title: "Comprensión auditiva",    subtitle: "Tu jefe australiano y compañeros de EE. UU. y Reino Unido, dentro y fuera de las reuniones", accent: "violet" },
-    challenges: { n: 4, minutes: "16–20", title: "Producción hablada",      subtitle: "Habla como en la reunión o la conversación real", accent: "emerald" }
+    review:    { n: 1, minutes: "00–04", seconds: 240, title: "Repaso exprés", subtitle: "Frases, vocabulario y gramática: primero lo dices, luego lo compruebas", accent: "amber" },
+    listening: { n: 2, minutes: "04–08", seconds: 240, title: "Oído", subtitle: "Mark, Sarah y Jake: entender, dictado y shadowing", accent: "violet" },
+    fluency:   { n: 3, minutes: "08–20", seconds: 720, title: "Soltura 4/3/2", subtitle: "Lo mismo tres veces, cada vez más rápido y con los mismos chunks", accent: "emerald" }
   },
 
   /* Pool → bloque de la sesión y nivel por defecto si el ítem no lo indica. */
   POOL_BLOCK: {
-    meetingMoves: "vocab", conversation: "vocab", everydayVocab: "vocab", hrVocab: "vocab", registerUpgrade: "vocab", collocations: "vocab", custom: "vocab",
-    grammar: "grammar", traps: "grammar",
+    meetingMoves: "review", conversation: "review", everydayVocab: "review", hrVocab: "review", registerUpgrade: "review", collocations: "review", custom: "review",
+    grammar: "review", traps: "review",
     listening: "listening",
-    challenges: "challenges"
+    challenges: "fluency"
   },
   POOL_DEFAULT_LEVEL: {
     meetingMoves: "b2", conversation: "b2", everydayVocab: "b2", hrVocab: "b2", registerUpgrade: "c1", collocations: "c1", custom: "b2",
     grammar: "b2", traps: "b2", listening: "b2", challenges: "c1"
   },
 
-  /* Cuántos ítems de cada pool entran en una sesión, según el nivel elegido. */
+  /* Cuántos ítems de cada pool entran en una sesión, según el nivel elegido.
+   * v2: menos reconocimiento y más tiempo hablando (el repaso exprés deja ~4 min
+   * y la soltura 4/3/2 se lleva 12). Además, SESSION_ROTATION añade 1 ítem al
+   * repaso de un pool que cambia cada día (así HR y colocaciones no desaparecen). */
   SESSION_MIX: {
-    b2: { vocab: { meetingMoves: 2, conversation: 2, everydayVocab: 2, hrVocab: 1, collocations: 1 }, grammar: { grammar: 5, traps: 2 }, listening: { listening: 2 }, challenges: { challenges: 1 } },
-    c1: { vocab: { meetingMoves: 2, conversation: 2, everydayVocab: 1, hrVocab: 1, registerUpgrade: 1, collocations: 1 }, grammar: { grammar: 4, traps: 2 }, listening: { listening: 2 }, challenges: { challenges: 1 } }
+    b2: { review: { conversation: 2, meetingMoves: 1, everydayVocab: 1, grammar: 2, traps: 1 }, listening: { listening: 1 }, fluency: { challenges: 1 } },
+    c1: { review: { conversation: 1, meetingMoves: 1, registerUpgrade: 1, collocations: 1, grammar: 2, traps: 1 }, listening: { listening: 1 }, fluency: { challenges: 1 } }
+  },
+  SESSION_ROTATION: {
+    b2: ["hrVocab", "collocations", "everydayVocab"],
+    c1: ["hrVocab", "everydayVocab"]
   },
 
   POOL_LABEL: {

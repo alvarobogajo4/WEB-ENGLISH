@@ -27,7 +27,10 @@ if (fs.existsSync(exportPath)) {
   catch (e) { source = `no se pudo leer ${exportPath}: ${e.message}`; }
 }
 
-const mix = D.SESSION_MIX[level];
+// Ítems por día: el reparto fijo más la parte del pool rotatorio (1 ítem cada N días).
+const mix = JSON.parse(JSON.stringify(D.SESSION_MIX[level]));
+const rot = (D.SESSION_ROTATION || {})[level] || [];
+for (const pool of rot) mix.review[pool] = (mix.review[pool] || 0) + 1 / rot.length;
 const rows = [];
 for (const [block, pools] of Object.entries(mix)) {
   for (const [pool, perDay] of Object.entries(pools)) {
@@ -37,7 +40,7 @@ for (const [block, pools] of Object.entries(mix)) {
     // En B2 la app agota primero los B2; los C1 entran solo cuando no queda B2 nuevo.
     const atLevel = level === "b2" ? unseen.filter((it) => lv(it) === "b2").length : unseen.length;
     const days = Math.floor(unseen.length / perDay);
-    rows.push({ pool, block, total: list.length, unseen: unseen.length, atLevel, perDay, daysLevel: Math.floor(atLevel / perDay), days });
+    rows.push({ pool, block, total: list.length, unseen: unseen.length, atLevel, perDay: Math.round(perDay * 100) / 100, daysLevel: Math.floor(atLevel / perDay), days });
   }
 }
 rows.sort((a, b) => a.daysLevel - b.daysLevel);
@@ -62,5 +65,5 @@ console.log(`Lotes cargados: ${(D.batches || []).join(", ") || "—"}`);
 const low = rows.filter((r) => r.daysLevel < WARN_DAYS);
 console.log("");
 console.log(low.length
-  ? `Prioridad para /generar-contenido: ${low.map((r) => `${r.pool} (+${Math.max(r.perDay * 21 - r.atLevel, r.perDay * 7)})`).join(", ")} — objetivo: 3 semanas de contenido nuevo en ${level.toUpperCase()}.`
+  ? `Prioridad para /generar-contenido: ${low.map((r) => `${r.pool} (+${Math.ceil(Math.max(r.perDay * 21 - r.atLevel, r.perDay * 7))})`).join(", ")} — objetivo: 3 semanas de contenido nuevo en ${level.toUpperCase()}.`
   : `Todo con ≥ ${WARN_DAYS} días de contenido nuevo.`);
